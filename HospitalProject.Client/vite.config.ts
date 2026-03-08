@@ -17,7 +17,6 @@ if (!existsSync(certPath) || !existsSync(keyPath)) {
   throw new Error('Certificate not found.');
 }
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -29,7 +28,8 @@ export default defineConfig({
     proxy: {
       '^/weatherforecast': {
         target: target,
-        secure: true
+        secure: true,
+        xfwd: true
       }
     }
   }

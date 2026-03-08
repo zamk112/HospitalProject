@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.HttpLogging;
+using Microsoft.AspNetCore.HttpOverrides;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -47,6 +48,11 @@ try
     builder.Services.AddOpenApi();
 
     var app = builder.Build();
+
+    app.UseForwardedHeaders(new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+    });
 
     app.UseSerilogRequestLogging();
     Log.Information("Application started! Logging to both console and/or file.");

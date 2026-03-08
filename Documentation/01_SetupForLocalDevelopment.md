@@ -47,7 +47,7 @@ Microsoft.Hosting.Lifetime: Information: Content root path: /Users/zamk/Projects
 The program '[30826] HospitalProject.Server' has exited with code 0 (0x0).
 ```
 
-The http port is also running, so I'm going to update and remove the HTTP URL from the `https` launch configuration from [launchSettings.json](../HospitalProject.Server/Properties/launchSettings.json) file.  
+The HTTP protocol is also running, so I'm going to update and remove the HTTP URL from the `https` launch configuration from [launchSettings.json](../HospitalProject.Server/Properties/launchSettings.json) file.  
 ```json
 {
   "$schema": "https://json.schemastore.org/launchsettings.json",
@@ -511,7 +511,7 @@ I kept the port the same as what you get when you create a ReactJS (TypeScript) 
   ➜  press h + enter to show help
 ```
 
-Everything now is running with HTTPS protocol so far good. When I click the `https://localhost:5173/` url, I can see now that Chrome is saying the website is secure.  
+Everything now is running with HTTPS protocol so far good. When I click the `https://localhost:5173/` URL, I can see now that Chrome is saying the website is secure.  
 ![Chrome is saying the website is secure](./images/Screenshot%202026-03-06%20at%2010.06.19 pm.png)
 
 ### Setting up the Proxy to backend API calls
@@ -631,7 +631,7 @@ Error: self-signed certificate; if the root CA is installed locally, try running
 
 ```
 
-And no request is made to the backend, I can in definitely that if you add the environment variable `NODE_USE_SYSTEM_CA=1` on Windows, the error `Error: self-signed certificate; if the root CA is installed locally, try running Node.js with --use-system-ca` goes away, because the command `dotnet dev-certs https --trust` already installed the self-signed certificate on the Windows Certificate store and it is the same on the MacOS certificate/keychain store and it's the same certificate that you're using for your ASP.NET Core application, but on my MacOS, this is not the case. But I did get around the issue on my macOS with the following command:  
+And no request is made to the backend, I can in definitely confirm that if you add the environment variable `NODE_USE_SYSTEM_CA=1` on Windows, the error `Error: self-signed certificate; if the root CA is installed locally, try running Node.js with --use-system-ca` goes away, because the command `dotnet dev-certs https --trust` already installed the self-signed certificate on the Windows Certificate store and it is the same on the MacOS certificate/keychain store and it's the same certificate that you're using for your ASP.NET Core application, but on my MacOS, this is not the case. But I did get around the issue on my macOS with the following command:  
 ```cmd
 > export NODE_EXTRA_CA_CERTS=~/Workspace/Certs/dotnet/hospitalproject.client.pem
 > npm run dev
@@ -651,7 +651,7 @@ And no request is made to the backend, I can in definitely that if you add the e
   ➜  press h + enter to show help
 ```
 
-When the page is loaded, it is secure and has loaded the weather data from the API call.  
+This command adds the certification to the nodeJS runtime certificate store. When the page is loaded, it is secure and has loaded the weather data from the API call.  
 ![Page Loaded with weather data](./images/Screenshot%202026-03-07%20at%201.32.35 am.png)
 
 According to [http-proxy-3](https://github.com/sagemathinc/http-proxy-3) that is used by [ViteJS](https://vite.dev/config/server-options#server-proxy), there is some limitation with SSL but it is for HTTP2 protocol, maybe I did something wrong on my macOS with how I generated self-signed certificate and of course any feedback will be appreciated 😊.

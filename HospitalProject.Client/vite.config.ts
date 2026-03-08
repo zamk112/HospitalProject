@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { readFileSync,  existsSync } from 'node:fs';
 import os from "node:os";
-import { env } from "node:process"
+import { env } from "node:process";
 
 
 const certName = 'hospitalproject.client';

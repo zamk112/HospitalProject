@@ -1,12 +1,14 @@
 # Introduction
 I have a few reasons why I want to use docker. If I was hosting my application on a Windows Server running on IIS, I would also have IIS also installed locally as well. The first reason is I would like to have the almost same configuration on my local IIS as the IIS running on a server. Secondly, once I've finished my round of development (coding, unit testing, etc..); I would like to deploy my web application stack onto docker and then run UI automation testing, once everything is good then I can deploy it onto the Windows Server. 
 
-I would like to following the same principals with hosting my application stack on NGINX and Docker. Right now, this step is just for making sure everything is going to work as expected with my current application stack and will build upon this further later.
+I would like to following the same principals with hosting my application stack on NGINX and Docker. Right now, this step is just for making sure everything is going to work as expected with my current application stack and will build upon this further later. After having a bit of reading, my initial goal of hosting both the front end and backend from one docker image with NGINX is possible but not the recommended practice, each needs to be on it's own containerised application, so I am going to follow the best practices first (Seriously, I just host database servers on Docker and nothing else, I'm still a noob with Docker 😅). Most of the places that I have worked, a web stack (usually worked with IIS) where both frontend and backend is hosted on the same server.
 
-The goal is to host one docker image where both the frontend and backend will be running from. Before I start creating a Docker file for the backend, I need to add some and make changes code to the application and these changes are related for running the application on NGINX. 
+And since this is project is based on hospital CRM, end-to-end encryption needs to apply. I understand this will apply a significant load on the server(s) or containers, but hey nobody said working with healthcare data is going to be easy 😁.
 
-## Configuring and Adding Forward Headers 
-The first thing I need to do is to add the Forward Request middleware and the reason for adding the Forward Request middleware is that NGINX will forward the request to the ASP.NET Core backend. I've added the Forward Request middleware just after the intialising the `app` variable step.  
+Before I start creating a Docker file for the backend, I need to add some and make changes code to the application and these changes are related for running the application on NGINX. 
+
+# Configuring and Adding Forward Headers 
+The first thing I need to do is to add the Forward Request middleware and the reason for adding the Forward Request middleware is that NGINX will forward the request to the ASP.NET Core/Kestrel backend. I've added the Forward Request middleware just after the intialising the `app` variable step.  
 
 ```csharp
     ...
@@ -62,7 +64,7 @@ HospitalProject.Server.dll (24099): Loaded '/usr/local/share/dotnet/shared/Micro
 2026-03-08 14:29:47 [INF] Request finished HTTP/1.1 GET https://localhost:5173/weatherforecast - 200 null application/json; charset=utf-8 47.4682ms
 ```
 
-As per [Host ASP.NET Core on Linux with Nginx | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/linux-nginx?view=aspnetcore-10.0&tabs=linux-ubuntu), this is due to proxies running loopback addresses such as 127.0.0.0/8, [::1] and the standard localhost address (127.0.0.1), are trusted by default. This will most likely change when I deploy the app onto docker and need to add a configure step in the ASP.NET Core pipeline with additional `ForwardedHeadersOptions`. But getting back to not seeing any forward request headers, I need to add a configuration to my [vite.config.ts](../HospitalProject.Client/vite.config.ts) which will add the forward request headers flag.   
+As per [Host ASP.NET Core on Linux with Nginx | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/linux-nginx?view=aspnetcore-10.0&tabs=linux-ubuntu), this is due to proxies running loopback addresses such as 127.0.0.0/8, [::1] and the standard localhost address (127.0.0.1), are trusted by default. This will most likely change when I deploy the app onto docker and need to add a configure step in the ASP.NET Core pipeline with additional `ForwardedHeadersOptions` in a production environment. But getting back to not seeing any forward request headers, I need to add a configuration to my [vite.config.ts](../HospitalProject.Client/vite.config.ts) which will add the forward request headers flag.   
 ```ts
 ...
 export default defineConfig({
@@ -125,8 +127,16 @@ Content-Type: application/json; charset=utf-8
 2026-03-08 15:06:46 [INF] Request finished HTTP/1.1 GET https://localhost:5173/weatherforecast - 200 null application/json; charset=utf-8 3.5612ms
 ```
 
-So now the request with forward headers are definitely coming through!
+So now the request with forward headers are coming through! But there is a catch to this. http-proxy-3 is sending 4 headers these are:  
+* `x-forwarded-for`
+* `x-forwarded-port`
+* `x-forwarded-host`
+* `x-forwarded-proto`
+
+When the request comes into ASP.NET Core, the `x-forwarded-for` & `x-forwarded-proto` headers are replaced with `X-Original-For` and `X-Original-Proto` respectively with the old values of `HttpContext.Connection.RemoteIpAddress` and `HttpContext.Request.Scheme`. This means that `x-forwarded-port` & `x-forwarded-host` is not being processed, and for `x-forwarded-host` this can be processed if I add the `ForwardedHeaders.XForwardedHost` flag to the Forward Header Middleware, and for `x-forwarded-port`, I might have to do extra processing when the request is sent in. But for now this is good enough. I'll see what happens when I setting and testing the deployment to docker.
 
 # References
 * [Host ASP.NET Core on Linux with Nginx | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/linux-nginx?view=aspnetcore-10.0&tabs=linux-ubuntu)
+* [Configure ASP.NET Core to work with proxy servers and load balancers | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0#forwarded-headers)
+* [ForwardedHeaders Enum (Microsoft.AspNetCore.HttpOverrides) | Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.httpoverrides.forwardedheaders?view=aspnetcore-10.0)
 * [sagemathinc/http-proxy-3: Modern rewrite of node-proxy (the original nodejs http proxy server)](https://github.com/sagemathinc/http-proxy-3?tab=readme-ov-file#options)

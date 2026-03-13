@@ -31,3 +31,4 @@ My choice of editor is VS code because that's what I have been using for ReactJS
 # Table of Contents
 * [Initial Commit](./Documentation/00_InitialCommit.md)
 * [Setting Up For Local Development](./Documentation/01_SetupForLocalDevelopment.md)
+* [Setting Up Nginx and Docker](./Documentation/02_SettingUpNginxAndDocker.md)

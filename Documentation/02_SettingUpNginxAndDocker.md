@@ -272,8 +272,52 @@ root@3214a0523726 /app [gifted_bhaskara]
 I have been running the command from the terminal `docker build -t hospital.project.server -f HospitalProject.Server/Dockerfile .` to build the docker container image and also use Docker Desktop to inspect the image with the debugger console.  
 ![Inspecting Docker Container Image](./images/Screenshot%202026-03-10%20at%2010.42.14 am.png)
 
-If you have a look at the container, there's no ports and you cannot hit the API endpoints either.  
+If you have a look at the container, there's no ports and you cannot hit the API endpoints either, because I have not exposed a port on docker for ASP.NET core traffic to go through.  
 ![Hospital Project Server running on Docker](./images/Screenshot%202026-03-10%20at%2010.51.19 am.png)
+
+Running this command `docker run -d -p 127.0.0.1:8080:8080 hospital.project.server`, I am able to launch my Docker image and as of right now, it's running with HTTP protocol not HTTPS.  
+```cmd
+> docker run -d -p 127.0.0.1:8080:8080 hospital.project.server
+e77a8acc3a715be04d2130ab4433a76af22c1c9f539d9707a2879deb0abb8312
+> curl http://localhost:8080/weatherforecast
+[{"date":"2026-03-14","temperatureC":23,"temperatureF":73,"summary":"Hot"},{"date":"2026-03-15","temperatureC":39,"temperatureF":102,"summary":"Chilly"},{"date":"2026-03-16","temperatureC":-19,"temperatureF":-2,"summary":"Warm"},{"date":"2026-03-17","temperatureC":-18,"temperatureF":0,"summary":"Balmy"},{"date":"2026-03-18","temperatureC":36,"temperatureF":96,"summary":"Cool"}]%                                                                                                                                                                     
+> curl https://localhost:8080/weatherforecast
+curl: (35) LibreSSL/3.3.6: error:1404B42E:SSL routines:ST_CONNECT:tlsv1 alert protocol version
+```
+
+Maybe I should have coded the SSL/TLS & HTTPS configurations within the code in [Program.cs](../HospitalProject.Server/Program.cs), but no, I'm not going to do. The main reason is deployment flexibility. You can use environment variables and configurations in [appsettings.json](../HospitalProject.Server/appsettings.json) (but going to run the docker images via command line with environment variables for now, which I'll do next) and you might need to add some extra code to get some of the stuff working the way you want from reading the config file too, which I am know I will do later.
+
+So I'm going to run docker with some environment variables and make sure it's using the HTTPS protocol. But the first thing I need to do is generate a certificate, this time a *.pfx certificate for the ASP.NET Core backend with `dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.server.pfx -p ********` (replace `********` with your password).  
+```cmd
+> dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.server.pfx -p ********
+A valid HTTPS certificate is already present.
+```
+
+Now, I'm going to launch docker with all the environment variables and also mounting my file locally to docker with this command:  
+```
+% docker run -d -p 127.0.0.1:5229:5229 \
+-e ASPNETCORE_URLS="https://+:5229" \
+-e ASPNETCORE_Kestrel__Certificates__Default__Path=/https/hospitalproject.server.pfx \
+-e ASPNETCORE_Kestrel__Certificates__Default__Password="********" \  
+-e ASPNETCORE_ENVIRONMENT=Development \
+-v ~/Workspaces/Certs/dotnet/hospitalproject.server.pfx:/https/hospitalproject.server.pfx:ro \
+hospital.project.server
+
+45691e19b16a1b9a0b1e044519d69e3f8a42a339cf364213208af03511c11439
+```
+And then when I run my `curl`, I get a response back with HTTPS and not HTTP.  
+```cmd
+> curl https://localhost:5229/weatherforecast
+[{"date":"2026-03-14","temperatureC":-10,"temperatureF":15,"summary":"Cool"},{"date":"2026-03-15","temperatureC":-17,"temperatureF":2,"summary":"Cool"},{"date":"2026-03-16","temperatureC":6,"temperatureF":42,"summary":"Cool"},{"date":"2026-03-17","temperatureC":53,"temperatureF":127,"summary":"Scorching"},{"date":"2026-03-18","temperatureC":51,"temperatureF":123,"summary":"Mild"}]%                                                                                                                                 
+> curl http://localhost:5229/weatherforecast 
+curl: (52) Empty reply from server
+> curl http://localhost:8080/weatherforecast
+curl: (7) Failed to connect to localhost port 8080 after 0 ms: Couldn't connect to server
+```
+
+Now, I should have added the HTTP url and with the `app.UseHttpsRedirection()` middleware, it should redirect to HTTPS, but at the moment, decided not to, because I don't need to due to going to use my reverse proxy only to use the HTTPS port. Secondly, I have created another problem where I'm not logging things out to my laptop, but will fix that later. And I should create a *.yaml file for my deployment too because running the command line command is painful 😅. And maybe I shouldn't have ran Docker with the `-d` flag and create multiple containers and also add the environment variable `ASPNETCORE_ENVIRONMENT=Development` (I got lazy, just wanted ASP.NET Core to use [appsettings.Development.json](../HospitalProject.Server/appsettings.Development.json) logging configuration 😜), since this is technically this is one-off run, but I wanted to keep the containers and see what the different configurations or where I screwed up with my command (and yes, I screwed up the commands a few times) by comparing the different containers.
+
+But before I start fixing and creating *.yaml files, the next thing I need to do is the ReactJS deployment with NGINX and also configure NGINX work as a my reverse proxy as well and make sure everything is working!
 
 # References
 * [Host ASP.NET Core on Linux with Nginx | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/linux-nginx?view=aspnetcore-10.0&tabs=linux-ubuntu)
@@ -282,3 +326,8 @@ If you have a look at the container, there's no ports and you cannot hit the API
 * [sagemathinc/http-proxy-3: Modern rewrite of node-proxy (the original nodejs http proxy server)](https://github.com/sagemathinc/http-proxy-3?tab=readme-ov-file#options)
 * [Secure your .NET cloud apps with rootless Linux Containers - .NET Blog](https://devblogs.microsoft.com/dotnet/securing-containers-with-rootless/)
 * [.NET application publishing overview - .NET | Microsoft Learn](https://learn.microsoft.com/en-us/dotnet/core/deploying/?pivots=visualstudio)
+* [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
+* [Dockerfile reference | Docker Docs](https://docs.docker.com/reference/dockerfile/)
+* [Best practices | Docker Docs](https://docs.docker.com/build/building/best-practices/)
+* [Part 1: Containerize an application | Docker Docs](https://docs.docker.com/get-started/workshop/02_our_app/)
+* [Hosting ASP.NET Core image in container using docker compose with HTTPS | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/security/docker-compose-https?view=aspnetcore-10.0)

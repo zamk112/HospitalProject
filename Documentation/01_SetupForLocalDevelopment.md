@@ -631,7 +631,10 @@ Error: self-signed certificate; if the root CA is installed locally, try running
 
 ```
 
-And no request is made to the backend, I can in definitely confirm that if you add the environment variable `NODE_USE_SYSTEM_CA=1` on Windows, the error `Error: self-signed certificate; if the root CA is installed locally, try running Node.js with --use-system-ca` goes away, because the command `dotnet dev-certs https --trust` already installed the self-signed certificate on the Windows Certificate store and it is the same on the MacOS certificate/keychain store and it's the same certificate that you're using for your ASP.NET Core application, but on my MacOS, this is not the case. But I did get around the issue on my macOS with the following command:  
+And no request is made to the backend, I can in definitely confirm that if you add the environment variable `NODE_USE_SYSTEM_CA=1` on Windows, the error `Error: self-signed certificate; if the root CA is installed locally, try running Node.js with --use-system-ca` goes away, because the command `dotnet dev-certs https --trust` already installed the self-signed certificate on the Windows Certificate store and it is the same on the MacOS certificate/keychain store and it's the same certificate that you're using for your ASP.NET Core application, but on my MacOS, this is not the case. 
+
+#### Set Environment variable NODE_EXTRA_CA_CERTS
+The first option to get around this issue is exporting an environment variable `NODE_EXTRA_CA_CERTS` with the file path to your certificate to get around the issue on my macOS with the following command:  
 ```cmd
 > export NODE_EXTRA_CA_CERTS=~/Workspace/Certs/dotnet/hospitalproject.client.pem
 > npm run dev
@@ -654,7 +657,37 @@ And no request is made to the backend, I can in definitely confirm that if you a
 This command adds the certification to the nodeJS runtime certificate store. When the page is loaded, it is secure and has loaded the weather data from the API call.  
 ![Page Loaded with weather data](./images/Screenshot%202026-03-07%20at%201.32.35 am.png)
 
-According to [http-proxy-3](https://github.com/sagemathinc/http-proxy-3) that is used by [ViteJS](https://vite.dev/config/server-options#server-proxy), there is some limitation with SSL but it is for HTTP2 protocol, maybe I did something wrong on my macOS with how I generated self-signed certificate and of course any feedback will be appreciated 😊.
+And then you can add the environment variable to [launch.json](../.vscode/launch.json) file or export it and add it your computers environment variable (I like adding it to the [launch.json](../.vscode/launch.json) instead of exporting to the computers environment variable). 
+
+But I found a better option, which I will discuss next!
+
+#### Adding agent property to proxy in ViteJS config
+Since I'm using the same self-signed certificates in different formats and already bound the certificate to the ViteJS proxy, instead of adding and environment variable, I've added an `agent` object to the `proxy` object and then instantiated a new `https.Agent` object and read-in the certificate file to the `ca` attribute.   
+```ts
+...
+import https from "https";
+...
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    https: {
+      key: readFileSync(keyPath),
+      cert: readFileSync(certPath)
+    },
+    proxy: {
+      '^/weatherforecast': {
+        target: target,
+        secure: true,
+        agent: new https.Agent({
+          ca: readFileSync(certPath)
+        })
+      }
+    }
+  }
+});
+```
+`https.Agent` is a nodeJS module, which you can use with the http-proxy-3 configuration which ViteJS uses, so now everything is in [vite.config.ts](../HospitalProject.Client/vite.config.ts), no environment variables need! This is also good since I also use my gaming PC (which is running Ubuntu) for development as well (yay for cross platform development 😃).
 
 # Bringing it all together - Launch configurations
 In my workspace, I'm going to create a [launch.json](../.vscode/launch.json) there was 2 launch configuration one for launching the ASP.NET Core web stack and the other will be for launching ViteJS/ReactJS web stack. And lastly, a compound launch configuration launching both applications at the same time. See below launch configuration for launching ASP.NET Core:  
@@ -717,14 +750,14 @@ Next I need to create a launch configuration for ReactJS and it will need to loa
         "webRoot": "${workspaceFolder}/HospitalProject.Client",
         "action": "debugWithChrome"
     },
-    "env": {
-        "NODE_EXTRA_CA_CERTS": "/Users/zamk/Workspace/Certs/dotnet/hospitalproject.client.pem"
-    }
+    // "env": {
+    //     "NODE_EXTRA_CA_CERTS": "${userHome}/Workspaces/Certs/dotnet/hospitalproject.client.pem"
+    // }
 }, 
 ...
 ``` 
 
-A few things is happening here, I'm launching ReactJS with the `npm run dev` command, `serverReadyAction` configuration looks for if viteJS is up running, once it is, the browser will open with the URL that contains *https://localhost:[portNum]*, with the debugger attached. Lastly, I added the environment variable to point to my certificate file (which is the **full path**) to ensure SSL is enabled.
+A few things is happening here, I'm launching ReactJS with the `npm run dev` command, `serverReadyAction` configuration looks for if viteJS is up running, once it is, the browser will open with the URL that contains *https://localhost:[portNum]*, with the debugger attached. Lastly, I added the environment variable to point to my certificate file to ensure SSL is enabled.
 
 Now bringing it all together with a compound launch configuration.  
 ```json
@@ -753,6 +786,7 @@ Now you can launch both launch configuration with the compound configuration!
 * [Server Options | Vite](https://vite.dev/config/server-options#server-https)
 * [sagemathinc/http-proxy-3: Modern rewrite of node-proxy (the original nodejs http proxy server)](https://github.com/sagemathinc/http-proxy-3?tab=readme-ov-file#options)
 * [Node.js — Enterprise Network Configuration](https://nodejs.org/en/learn/http/enterprise-network-configuration#adding-ca-certificates-from-the-system-store)
+* [TLS (SSL) | Node.js v25.8.1 Documentation](https://nodejs.org/api/tls.html#tlssetdefaultcacertificatescerts)
 * [Node.js — Node.js v23.8.0 (Current)](https://nodejs.org/en/blog/release/v23.8.0)
 * [Frequently Asked Questions](https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/faq.md#how-does-the-chrome-certificate-verifier-integrate-with-platform-trust-stores-for-local-trust-decisions)
 * [List of configurable options](https://code.visualstudio.com/docs/csharp/debugger-settings)

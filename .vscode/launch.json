@@ -36,9 +36,9 @@
                 "webRoot": "${workspaceFolder}/HospitalProject.Client",
                 "action": "debugWithChrome"
             },
-            "env": {
-                "NODE_EXTRA_CA_CERTS": "/Users/zamk/Workspace/Certs/dotnet/hospitalproject.client.pem"
-            }
+            // "env": {
+            //     "NODE_EXTRA_CA_CERTS": "${userHome}/Workspaces/Certs/dotnet/hospitalproject.client.pem"
+            // }
         },        
     ],
     "compounds": [

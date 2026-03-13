@@ -423,10 +423,10 @@ And my Chrome Browser is complaining that my website is *not secure*:
 So next thing is to configure ViteJS with SSL, so our connection is secure!
 
 ## SSL certificate generation
-First thing I need to do is to generate the SSL pem certificate and store it somewhere. I've created a **~/Workspace/Certs/** directory in my user account directory and I'm going to generate the pem and key files with the `dotnet` tool and create one more directory inside **~/Workspace/Certs/** called **dotnet** and store it there.  
+First thing I need to do is to generate the SSL pem certificate and store it somewhere. I've created a **~/Workspaces/Certs/** directory in my user account directory and I'm going to generate the pem and key files with the `dotnet` tool and create one more directory inside **~/Workspaces/Certs/** called **dotnet** and store it there.  
 ```cmd
-mkdir -p ~/Workspace/Certs/dotnet
-dotnet dev-certs https -ep ~/Workspace/Certs/dotnet/hospitalproject.client.pem --format pem -np
+mkdir -p ~/Workspaces/Certs/dotnet
+dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.client.pem --format pem -np
 ```
 
 When you run the above command, you will get another dialog box to enter your password:  
@@ -434,10 +434,10 @@ When you run the above command, you will get another dialog box to enter your pa
 
 After entering the password and then clicking the *Allow* button, this will generate a pem and key file in the directory:  
 ```cmd
-> mkdir -p ~/Workspace/Certs/dotnet
-> dotnet dev-certs https -ep ~/Workspace/Certs/dotnet/hospitalproject.client.pem --format pem -np
+> mkdir -p ~/Workspaces/Certs/dotnet
+> dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.client.pem --format pem -np
 A valid HTTPS certificate is already present.
-> ls ~/Workspace/Certs/dotnet
+> ls ~/Workspaces/Certs/dotnet
 hospitalproject.client.key      hospitalproject.client.pem
 ```
 
@@ -636,7 +636,7 @@ And no request is made to the backend, I can in definitely confirm that if you a
 #### Set Environment variable NODE_EXTRA_CA_CERTS
 The first option to get around this issue is exporting an environment variable `NODE_EXTRA_CA_CERTS` with the file path to your certificate to get around the issue on my macOS with the following command:  
 ```cmd
-> export NODE_EXTRA_CA_CERTS=~/Workspace/Certs/dotnet/hospitalproject.client.pem
+> export NODE_EXTRA_CA_CERTS=~/Workspaces/Certs/dotnet/hospitalproject.client.pem
 > npm run dev
 
 > hospitalproject-client@0.0.0 dev
@@ -751,7 +751,7 @@ Next I need to create a launch configuration for ReactJS and it will need to loa
         "action": "debugWithChrome"
     },
     // "env": {
-    //     "NODE_EXTRA_CA_CERTS": "${userHome}/Workspaces/Certs/dotnet/hospitalproject.client.pem"
+    //     "NODE_EXTRA_CA_CERTS": "${userHome}/Workspacess/Certs/dotnet/hospitalproject.client.pem"
     // }
 }, 
 ...

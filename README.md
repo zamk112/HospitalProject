@@ -19,4 +19,7 @@ More importantly, it's a full-stack template for building and hosting a ReactJS 
 # Development Environment
 I'm developing locally on a MacBook Air M1 and an Ubuntu gaming PC, using VS Code as my editor on both. Docker with an NGINX image serves as my production-like or staging environment. This setup came about practically — but it works well (so far).
 
+# Table of Contents
+* [Project Initialisation](./Documentation/01_ProjectInitisation.md)
+
 *This is a work in progress. Feedback and suggestions are welcome — I'm not perfect and happy to be corrected 😅*

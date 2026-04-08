@@ -1,0 +1,1545 @@
+# Introduction
+I have a few reasons why I want to use docker. If I was hosting my application on a Windows Server running on IIS, I would also have IIS also installed locally as well. The first reason is I would like to have the almost same configuration on my local IIS as the IIS running on a server. Secondly, once I've finished my round of development (coding, unit testing, etc..); I would like to deploy my web application stack onto docker and then run UI automation testing, once everything is good then I can deploy it onto the Windows Server. 
+
+I would like to following the same principals with hosting my application stack on NGINX and Docker. Right now, this step is just for making sure everything is going to work as expected with my current application stack and will build upon this further later. After having a bit of reading, my initial goal of hosting both the front end and backend from one docker image with NGINX is possible but not the recommended practice, each needs to be on it's own containerised application, so I am going to follow the best practices first (Seriously, I just host database servers on Docker and nothing else, I'm still a noob with Docker 😅). Most of the places that I have worked, a web stack (usually worked with IIS) where both frontend and backend is hosted on the same server.
+
+And since this is project is based on hospital CRM, end-to-end encryption needs to apply. I understand this will apply a significant load on the server(s) or containers, but hey nobody said working with healthcare data is going to be easy 😁.
+
+Before I start creating a Docker file for the backend, I need to add some and make changes code to the application and these changes are related for running the application on NGINX. 
+
+# Configuring and Adding Forward Headers 
+The first thing I need to do is to add the Forward Request middleware and the reason for adding the Forward Request middleware is that NGINX will forward the request to the ASP.NET Core/Kestrel backend. I've added the Forward Request middleware just after the intialising the `app` variable step.  
+
+```csharp
+    ...
+    var app = builder.Build();
+
+    app.UseForwardedHeaders(new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+    });
+    ...
+```
+
+Let's see what happens when I launch both frontend and backend locally and see if anything is broken. At the moment the page is loading with the API call to retrieve the weather data, but I do not see the forward request headers being sent with the request.  
+```
+2026-03-08 14:29:40 [INF] Now listening on: https://localhost:7083
+2026-03-08 14:29:40 [INF] Application started. Press Ctrl+C to shut down.
+2026-03-08 14:29:40 [INF] Hosting environment: Development
+2026-03-08 14:29:40 [INF] Content root path: /Users/zamk/Projects/HospitalProject/HospitalProject.Server
+HospitalProject.Server.dll (24099): Loaded '/usr/local/share/dotnet/shared/Microsoft.NETCore.App/10.0.2/System.Net.WebSockets.dll'. Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled.
+2026-03-08 14:29:47 [INF] Request starting HTTP/1.1 GET https://localhost:5173/weatherforecast - null null
+2026-03-08 14:29:47 [INF] Request:
+Protocol: HTTP/1.1
+Method: GET
+Scheme: https
+PathBase: 
+Path: /weatherforecast
+Accept: */*
+Connection: close
+Host: localhost:5173
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36
+Accept-Encoding: gzip, deflate, br, zstd
+Accept-Language: en-GB,en-US;q=0.9,en;q=0.8
+Referer: https://localhost:5173/
+sec-ch-ua-platform: "macOS"
+sec-ch-ua: "Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"
+sec-ch-ua-mobile: ?0
+sec-fetch-site: same-origin
+sec-fetch-mode: cors
+sec-fetch-dest: empty
+priority: u=1, i
+2026-03-08 14:29:47 [INF] Executing endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-03-08 14:29:47 [INF] Route matched with {action = "Get", controller = "WeatherForecast"}. Executing controller action with signature System.Collections.Generic.IEnumerable`1[HospitalProject.Server.WeatherForecast] Get() on controller HospitalProject.Server.Controllers.WeatherForecastController (HospitalProject.Server).
+2026-03-08 14:29:47 [INF] Executing ObjectResult, writing value of type 'HospitalProject.Server.WeatherForecast[]'.
+2026-03-08 14:29:47 [INF] Response:
+StatusCode: 200
+Content-Type: application/json; charset=utf-8
+HospitalProject.Server.dll (24099): Loaded '/usr/local/share/dotnet/shared/Microsoft.AspNetCore.App/10.0.2/Microsoft.AspNetCore.WebUtilities.dll'. Skipped loading symbols. Module is optimized and the debugger option 'Just My Code' is enabled.
+2026-03-08 14:29:47 [INF] Executed action HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server) in 16.8436ms
+2026-03-08 14:29:47 [INF] Executed endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-03-08 14:29:47 [INF] ResponseBody: [{"date":"2026-03-09","temperatureC":0,"temperatureF":32,"summary":"Scorching"},{"date":"2026-03-10","temperatureC":-6,"temperatureF":22,"summary":"Cool"},{"date":"2026-03-11","temperatureC":33,"temperatureF":91,"summary":"Balmy"},{"date":"2026-03-12","temperatureC":-7,"temperatureF":20,"summary":"Chilly"},{"date":"2026-03-13","temperatureC":-2,"temperatureF":29,"summary":"Bracing"}]
+2026-03-08 14:29:47 [INF] Duration: 30.1192ms
+2026-03-08 14:29:47 [INF] HTTP GET /weatherforecast responded 200 in 33.0523 ms
+2026-03-08 14:29:47 [INF] Request finished HTTP/1.1 GET https://localhost:5173/weatherforecast - 200 null application/json; charset=utf-8 47.4682ms
+```
+
+As per [Host ASP.NET Core on Linux with Nginx | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/linux-nginx?view=aspnetcore-10.0&tabs=linux-ubuntu), this is due to proxies running loopback addresses such as 127.0.0.0/8, [::1] and the standard localhost address (127.0.0.1), are trusted by default. This will most likely change when I deploy the app onto docker and need to add a configure step in the ASP.NET Core pipeline with additional `ForwardedHeadersOptions` in a production environment. But getting back to not seeing any forward request headers, I need to add a configuration to my [vite.config.ts](../HospitalProject.Client/vite.config.ts) which will add the forward request headers flag.
+
+```ts
+...
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    https: {
+      key: readFileSync(keyPath),
+      cert: readFileSync(certPath)
+    },
+    proxy: {
+      '^/weatherforecast': {
+        target: target,
+        secure: true,
+        agent: new https.Agent({
+          ca: readFileSync(certPath)
+        }),
+        xfwd: true
+      }
+    }
+  }
+});
+```
+
+
+Now that I have done is add the `xfwd` flag, the proxy will add the headers when sending the request back to the server. After restarting both the front and backends, now I can see the forward request headers in the logs even though it is redacted.  
+```
+2026-03-08 15:06:46 [INF] Request starting HTTP/1.1 GET https://localhost:5173/weatherforecast - null null
+2026-03-08 15:06:46 [INF] Request:
+Protocol: HTTP/1.1
+Method: GET
+Scheme: https
+PathBase: 
+Path: /weatherforecast
+Accept: */*
+Connection: close
+Host: localhost:5173
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36
+Accept-Encoding: gzip, deflate, br, zstd
+Accept-Language: en-GB,en-US;q=0.9,en;q=0.8
+Referer: https://localhost:5173/
+sec-ch-ua-platform: "macOS"
+sec-ch-ua: "Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"
+sec-ch-ua-mobile: ?0
+sec-fetch-site: same-origin
+sec-fetch-mode: cors
+sec-fetch-dest: empty
+priority: u=1, i
+X-Original-Proto: [Redacted]                                 <---- HERE!
+x-forwarded-port: [Redacted]                                 <---- HERE!
+x-forwarded-host: [Redacted]                                 <---- HERE!
+X-Original-For: [Redacted]                                   <---- HERE!
+2026-03-08 15:06:46 [INF] Executing endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-03-08 15:06:46 [INF] Route matched with {action = "Get", controller = "WeatherForecast"}. Executing controller action with signature System.Collections.Generic.IEnumerable`1[HospitalProject.Server.WeatherForecast] Get() on controller HospitalProject.Server.Controllers.WeatherForecastController (HospitalProject.Server).
+2026-03-08 15:06:46 [INF] Executing ObjectResult, writing value of type 'HospitalProject.Server.WeatherForecast[]'.
+2026-03-08 15:06:46 [INF] Response:
+StatusCode: 200
+Content-Type: application/json; charset=utf-8
+2026-03-08 15:06:46 [INF] Executed action HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server) in 1.358ms
+2026-03-08 15:06:46 [INF] Executed endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-03-08 15:06:46 [INF] ResponseBody: [{"date":"2026-03-09","temperatureC":12,"temperatureF":53,"summary":"Mild"},{"date":"2026-03-10","temperatureC":39,"temperatureF":102,"summary":"Scorching"},{"date":"2026-03-11","temperatureC":34,"temperatureF":93,"summary":"Freezing"},{"date":"2026-03-12","temperatureC":23,"temperatureF":73,"summary":"Chilly"},{"date":"2026-03-13","temperatureC":44,"temperatureF":111,"summary":"Freezing"}]
+2026-03-08 15:06:46 [INF] Duration: 2.3513ms
+2026-03-08 15:06:46 [INF] HTTP GET /weatherforecast responded 200 in 2.9145 ms
+2026-03-08 15:06:46 [INF] Request finished HTTP/1.1 GET https://localhost:5173/weatherforecast - 200 null application/json; charset=utf-8 3.5612ms
+```
+
+So now the request with forward headers are coming through! But there is a catch to this. http-proxy-3 is sending 4 headers these are:  
+* `x-forwarded-for`
+* `x-forwarded-port`
+* `x-forwarded-host`
+* `x-forwarded-proto`
+
+When the request comes into ASP.NET Core, the `x-forwarded-for` & `x-forwarded-proto` headers are replaced with `X-Original-For` and `X-Original-Proto` respectively with the old values of `HttpContext.Connection.RemoteIpAddress` and `HttpContext.Request.Scheme`. This means that `x-forwarded-port` & `x-forwarded-host` is not being processed, and for `x-forwarded-host` this can be processed if I add the `ForwardedHeaders.XForwardedHost` flag to the Forward Header Middleware, and for `x-forwarded-port`, I might have to do extra processing when the request is sent in. But for now this is good enough. I'll see what happens when I setting and testing the deployment to docker.
+
+# Docker Configuration
+The quickest way to get started with creating a Docker Image on VS Code is using the plugin [Container Tools](https://marketplace.visualstudio.com/items?itemName=ms-azuretools.vscode-containers) with the command palette selecting the option "Containers: Add Docker Files to Workspace", but since I don't know Docker very well. Although, the files were generated by the command palette, after playing around with each section and step, I had to customise it so that ASP.NET Core app will run in it's own container. The command palette also generated the VS code task and launch configurations, but I don't want to use all of them and when it comes to do UI automation testing, I plan to invoke docker apps from command line. The keywords `FROM` AND `AS` are used quite a bit. `FROM` specifies the base image to start from and `AS` gives the stage a name. 
+
+So Docker is going to be my staging environment. And after that UAT (probably going to host on a VM..... haven't decided yet).
+
+## ASP.NET Core Dockerfile And appsettings.json Configuration
+But before I do build the ASP.NET Core image, I'm going to create a new **appsettings.json** file called [appsettings.Staging.json](../HospitalProject.Server/appsettings.Staging.json), it's basically the same as [appsettings.Development.json](../HospitalProject.Server/appsettings.Development.json). The command palette generated the following docker file below:
+```dockerfile
+  FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+  WORKDIR /app
+
+  USER app
+  FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+  ARG configuration=Release
+  WORKDIR /src
+  COPY ["HospitalProject.Server.csproj", "HospitalProject.Server/"]
+  RUN dotnet restore "HospitalProject.Server.csproj"
+  COPY . .
+  WORKDIR "/src/HospitalProject.Server"
+  RUN dotnet build "HospitalProject.Server.csproj" -c $configuration -o /app/build
+
+  FROM build AS publish
+  ARG configuration=Release
+  RUN dotnet publish "HospitalProject.Server.csproj" -c $configuration -o /app/publish /p:UseAppHost=false
+
+  FROM base AS final
+  WORKDIR /app
+  COPY --from=publish /app/publish .
+  ENTRYPOINT ["dotnet", "HospitalProject.Server.dll"]
+``` 
+
+
+In the first two lines `FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base` downloads and sets up the run time and `WORKDIR /app` command sets the working directory to **app** for the ASP.NET Core runtime. And lastly, `USER app` changes the user from a root account to app account for security reasons to run the entire image. And the app user is part of the ASP.NET Core image. This means the build happens with root but the application runs under app user.
+
+The next couple of lines is the build step `FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build` targets the build to the specific OS with the `--platform=$BUILDPLATFORM`, with `ARG configuration=Release` is essentially a parameter that is available during the image building process, when you generate the the Dockerfiles with the command palette command, it also generates YAML files for production and debug release, debug release came in handy when I couldn't initially launch the app and I was able to troubleshoot and find out where I went wrong. And then working directory is changed with `WORKDIR /src` to the **src** directory where the binaries will reside. Next is the `COPY ["HospitalProject.Server.csproj", "."]`, which copies the csproj file from the host stores in it in the image. And then the `RUN dotnet restore "HospitalProject.Server.csproj"` command is ran to restore nuget packages and other dependencies as well. At this stage, Docker seems to cache from `WORKDIR /src` step to now. This is useful for when reusing the image for subsequent builds. And I copy the rest of the contents over from **HospitalProject.Server** directory locally to the **src** directory on the image and then lastly run the command `RUN dotnet build "HospitalProject.Server.csproj" -c $configuration -o /app/build`, which deploys a Release build in the **/app/build** directory in the image.
+
+The section starts off with `FROM build AS publish` where this build called publish will be based off from the image named build. Again the command `ARG configuration=Release` sets the configuration parameter to Release. And then lastly `RUN dotnet publish "HospitalProject.Server.csproj" -c $configuration -o /app/publish -p:UseAppHost=false` command does a publish build into the **/app/publish** directory. There's a flag at the end `/p:UseAppHost=false` which basically means it will skip generating a native executable wrapper, since the container will invoke `dotnet` directly. At this point, I can still see the directories, **src**, **/app/build** and **/app/publish**, when I look through the Docker debugger.  
+```cmd
+         ▄                                                                                                                                       
+     ▄ ▄ ▄  ▀▄▀                                                                                                                                  
+   ▄ ▄ ▄ ▄ ▄▇▀  █▀▄ █▀█ █▀▀ █▄▀ █▀▀ █▀█                                                                                                          
+  ▀████████▀    █▄▀ █▄█ █▄▄ █ █ ██▄ █▀▄                                                                                                          
+   ▀█████▀                        DEBUG                                                                                                          
+                                                                                                                                                 
+Builtin commands:                                                                                                                                
+- install [tool1] [tool2] ...    Add Nix packages from: https://search.nixos.org/packages                                                        
+- uninstall [tool1] [tool2] ...  Uninstall NixOS package(s).                                                                                     
+- entrypoint                     Print/lint/run the entrypoint.                                                                                  
+- builtins                       Show builtin commands.                                                                                          
+                                                                                                                                                 
+Checks:                                                                                                                                          
+✓ distro:            Ubuntu 24.04.4 LTS                                                                                                          
+✓ entrypoint linter: no errors (run 'entrypoint' for details)                                                                                    
+                                                                                                                                                 
+Note: This is a sandbox shell. All changes will not affect the actual container.                                                                 
+                                                                                                                                  Version: 0.0.47
+root@91ff76a04c73 /src [compassionate_heisenberg]
+docker > ls
+Controllers  HospitalProject.Server.csproj  Program.cs  WeatherForecast.cs            appsettings.json  obj
+Dockerfile   Logs                           Properties  appsettings.Development.json  bin
+root@91ff76a04c73 /src [compassionate_heisenberg]
+docker > cd /app 
+root@91ff76a04c73 /app [compassionate_heisenberg]
+docker > ls
+build  publish
+root@91ff76a04c73 /app [compassionate_heisenberg]
+docker > 
+```
+
+The last section, uses the base image with the command `FROM base AS final`. With the working directory set to the **app** directory with the command `WORKDIR /app` as the working directory and then copies the content from the publish build with the command `COPY --from=publish /app/publish .` into **app** removes all three directories and the only directory remaining is the **app** with the binaries of the publish build.  
+```cmd
+         ▄                                                                                                                                       
+     ▄ ▄ ▄  ▀▄▀                                                                                                                                  
+   ▄ ▄ ▄ ▄ ▄▇▀  █▀▄ █▀█ █▀▀ █▄▀ █▀▀ █▀█                                                                                                          
+  ▀████████▀    █▄▀ █▄█ █▄▄ █ █ ██▄ █▀▄                                                                                                          
+   ▀█████▀                        DEBUG                                                                                                          
+                                                                                                                                                 
+Builtin commands:                                                                                                                                
+- install [tool1] [tool2] ...    Add Nix packages from: https://search.nixos.org/packages                                                        
+- uninstall [tool1] [tool2] ...  Uninstall NixOS package(s).                                                                                     
+- entrypoint                     Print/lint/run the entrypoint.                                                                                  
+- builtins                       Show builtin commands.                                                                                          
+                                                                                                                                                 
+Checks:                                                                                                                                          
+✓ distro:            Ubuntu 24.04.4 LTS                                                                                                          
+✓ entrypoint linter: no errors (run 'entrypoint' for details)                                                                                    
+                                                                                                                                                 
+This is an attach shell, i.e.:                                                                                                                   
+- Any changes to the container filesystem are visible to the container directly.                                                                 
+- The /nix directory is invisible to the actual container.                                                                                       
+                                                                                                                                  Version: 0.0.47
+root@3214a0523726 /app [gifted_bhaskara]
+docker > cd / 
+root@3214a0523726 / [gifted_bhaskara]
+docker > ls
+app  bin  boot  dev  etc  home  lib  media  mnt  nix  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
+root@3214a0523726 / [gifted_bhaskara]
+docker > cd /app
+root@3214a0523726 /app [gifted_bhaskara]
+docker > ls
+HospitalProject.Server.deps.json                       Microsoft.OpenApi.dll               Serilog.Sinks.Debug.dll
+HospitalProject.Server.dll                             Serilog.AspNetCore.dll              Serilog.Sinks.File.dll
+HospitalProject.Server.pdb                             Serilog.Extensions.Hosting.dll      Serilog.dll
+HospitalProject.Server.runtimeconfig.json              Serilog.Extensions.Logging.dll      web.config
+HospitalProject.Server.staticwebassets.endpoints.json  Serilog.Formatting.Compact.dll 
+Microsoft.AspNetCore.OpenApi.dll                       Serilog.Settings.Configuration.dll
+Microsoft.Extensions.DependencyModel.dll               Serilog.Sinks.Console.dll
+root@3214a0523726 /app [gifted_bhaskara]
+```
+
+Before running the build command, I excluded any kind of **appsettings.json** files from being copied over to the docker container and instead going to mount it in the **app** directory in the container from my host host machine. And going to do this with [.dockerignore](../HospitalProject.Server/.dockerignore) file.  
+```
+.dockerignore
+Dockerfile
+appsettings.json
+appsettings.*.json
+```
+
+And the reason for excluding the **appsettings.json** files is because I want to be able to make changes to my configuration without deploying a new image and container. I have been running the command from the terminal `docker build -t hospital.project.server -f HospitalProject.Server/Dockerfile --pull HospitalProject.Server` to build the docker container image and also use Docker Desktop to inspect the image with the debugger console.  
+![Inspecting Docker Container Image](./images/Screenshot%202026-03-10%20at%2010.42.14 am.png)
+
+Just one thing I'd like to mention with my `docker build` command is that I added the `--pull` argument, so the build context can reference all docker related config files such as **.dockerignore** file, which I have not included for this build (but I have in the ReactJS and NGINX) build.
+
+If you have a look at the container, there's no ports and you cannot hit the API endpoints either, because I have not exposed a port on docker for ASP.NET core traffic to go through.  
+![Hospital Project Server running on Docker](./images/Screenshot%202026-03-10%20at%2010.51.19 am.png)
+
+Running this command `docker run -d -p 127.0.0.1:8080:8080 hospital.project.server`, I am able to launch my Docker image and as of right now, it's running with HTTP protocol not HTTPS.  
+```cmd
+> docker run -d -p 127.0.0.1:8080:8080 hospital.project.server
+e77a8acc3a715be04d2130ab4433a76af22c1c9f539d9707a2879deb0abb8312
+> curl http://localhost:8080/weatherforecast
+[{"date":"2026-03-14","temperatureC":23,"temperatureF":73,"summary":"Hot"},{"date":"2026-03-15","temperatureC":39,"temperatureF":102,"summary":"Chilly"},{"date":"2026-03-16","temperatureC":-19,"temperatureF":-2,"summary":"Warm"},{"date":"2026-03-17","temperatureC":-18,"temperatureF":0,"summary":"Balmy"},{"date":"2026-03-18","temperatureC":36,"temperatureF":96,"summary":"Cool"}]%                                                                                                                                                                     
+> curl https://localhost:8080/weatherforecast
+curl: (35) LibreSSL/3.3.6: error:1404B42E:SSL routines:ST_CONNECT:tlsv1 alert protocol version
+```
+
+Maybe I should have coded the SSL/TLS & HTTPS configurations within the code in [Program.cs](../HospitalProject.Server/Program.cs), but no, I'm not going to do just yet (later when I build out the complete docker deployment or close to it). You can use environment variables and configurations in [appsettings.json](../HospitalProject.Server/appsettings.json) (but going to run the docker images via command line with environment variables for now, which I'll do next) and you might need to add some extra code to get some of the stuff working the way you want from reading the config file too, which I am know I will do later.
+
+So I'm going to run docker with some environment variables and make sure it's using the HTTPS protocol. But the first thing I need to do is generate a certificate, this time a *.pfx certificate for the ASP.NET Core backend with `dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.server.pfx -p ********` (replace `********` with your password).  
+```cmd
+> dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.server.pfx -p ********
+A valid HTTPS certificate is already present.
+```
+
+Now, I'm going to launch docker with all the environment variables and also mounting my file locally to docker with this command:  
+```
+> docker run -d -p 127.0.0.1:5229:5229 \
+-e ASPNETCORE_URLS="https://+:5229" \
+-e ASPNETCORE_Kestrel__Certificates__Default__Path=/https/hospitalproject.server.pfx \
+-e ASPNETCORE_Kestrel__Certificates__Default__Password="********" \
+-e ASPNETCORE_ENVIRONMENT=Staging \
+-v ~/Workspaces/Certs/dotnet/hospitalproject.server.pfx:/https/hospitalproject.server.pfx:ro \
+-v ~/Projects/HospitalProject/HospitalProject.Server/appsettings.Staging.json:/app/appsettings.Staging.json:ro \
+-v ~/Projects/HospitalProject/HospitalProject.Server/appsettings.json:/app/appsettings.json:ro \
+hospital.project.server
+
+45691e19b16a1b9a0b1e044519d69e3f8a42a339cf364213208af03511c11439
+```
+And then when I run my `curl`, I get a response back with HTTPS and not HTTP.  
+```cmd
+> curl https://localhost:5229/weatherforecast
+[{"date":"2026-03-14","temperatureC":-10,"temperatureF":15,"summary":"Cool"},{"date":"2026-03-15","temperatureC":-17,"temperatureF":2,"summary":"Cool"},{"date":"2026-03-16","temperatureC":6,"temperatureF":42,"summary":"Cool"},{"date":"2026-03-17","temperatureC":53,"temperatureF":127,"summary":"Scorching"},{"date":"2026-03-18","temperatureC":51,"temperatureF":123,"summary":"Mild"}]%                                                                                                                                 
+> curl http://localhost:5229/weatherforecast 
+curl: (52) Empty reply from server
+> curl http://localhost:8080/weatherforecast
+curl: (7) Failed to connect to localhost port 8080 after 0 ms: Couldn't connect to server
+```
+
+Maybe I should have added the HTTP url and with the `app.UseHttpsRedirection()` middleware, it should redirect to HTTPS, but at the moment, decided not to, because I don't need to due to going to use my reverse proxy only to use the HTTPS port. 
+
+But before I start fixing and creating *.yaml files, the next thing I need to do is the ReactJS deployment with NGINX and also configure NGINX work as a my reverse proxy as well and make sure everything is working!
+
+## Node.js & NGINX Dockerfile
+First thing I'm going to talk about is the [Dockerfile](../HospitalProject.Client/Dockerfile), it's really straightforward (at the moment).  
+```dockerfile
+ARG NODE_VERSION=current-alpine
+ARG NGINX_VERSION=stable-alpine
+
+FROM node:${NODE_VERSION} AS builder
+WORKDIR /app
+COPY ["package.json", "package-lock.json", "./"]
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:${NGINX_VERSION} AS runner
+COPY --chown=nginx:nginx --from=builder /app/dist /usr/share/nginx/html
+USER nginx
+EXPOSE 443
+ENTRYPOINT ["nginx", "-c", "/etc/nginx/nginx.conf"]
+CMD ["-g", "daemon off;"]
+``` 
+
+This [Dockerfile](../HospitalProject.Client/Dockerfile), I hand crafted and also added a [.dockerignore](../HospitalProject.Client/.dockerignore) file, which excludes the following content:   
+```
+node_modules
+README.md
+staging.nginx.conf
+Dockerfile
+.dockerignore
+```
+
+Based on the arguments that I have set at the beginning, I am using the current and stable version of both Node.js and NGIX respectively (Real World scenario would be to pick a specific version and stick to it until the newer version is completely tested, but I just want to see what breaks with the latest stable release that comes out).   
+```dockerfile
+ARG NODE_VERSION=current-alpine
+ARG NGINX_VERSION=stable-alpine
+...
+```
+
+The next part which is the building the ReactJS app is quite interesting:  
+```dockerfile
+...
+FROM node:${NODE_VERSION} AS builder
+WORKDIR /app
+COPY ["package.json", "package-lock.json", "./"]
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY . .
+RUN npm run build
+...
+```
+
+### Node.js Configuration
+The first three lines are pretty straight forward, using the node image as our builder, setting the work directory to **app** and then copying the [package.json](../HospitalProject.Client/package.json) & [package-lock.json](../HospitalProject.Client/package-lock.json) files. But the next line `RUN --mount=type=cache,target=/root/.npm npm ci` is interesting because `npm ci` uses the [package-lock.json](../HospitalProject.Client/package-lock.json) to install all the dependencies and this command caches it, which is different to how caching is done for the ASP.NET Core Docker image. 
+
+But once the dependencies are install, everything else is copied excluding the content from [.dockerignore](../HospitalProject.Client/.dockerignore) file and then the `RUN npm run build` builds the ReactJS app which is ready for deployment.
+
+At this stage and excluding the NGINX image setup. If I ran my command just up for the NodeJS build, it will fail. 
+```cmd
+> docker build -t hospital.project.client -f HospitalProject.Client/Dockerfile --pull HospitalProject.Client/
+[+] Building 3.7s (11/11) FINISHED                                                                                                                                                                                                                                         docker:desktop-linux
+ => [internal] load build definition from Dockerfile                                                                                                                                                                                                                                       0.0s
+ => => transferring dockerfile: 501B                                                                                                                                                                                                                                                       0.0s
+ => [internal] load metadata for docker.io/library/node:current-alpine                                                                                                                                                                                                                     2.0s
+ => [auth] library/node:pull token for registry-1.docker.io                                                                                                                                                                                                                                0.0s
+ => [internal] load .dockerignore                                                                                                                                                                                                                                                          0.0s
+ => => transferring context: 93B                                                                                                                                                                                                                                                           0.0s
+ => [builder 1/6] FROM docker.io/library/node:current-alpine@sha256:ad82ecad30371c43f4057aaa4800a8ed88f9446553a2d21323710c7b937177fc                                                                                                                                                       0.0s
+ => => resolve docker.io/library/node:current-alpine@sha256:ad82ecad30371c43f4057aaa4800a8ed88f9446553a2d21323710c7b937177fc                                                                                                                                                               0.0s
+ => [internal] load build context                                                                                                                                                                                                                                                          0.0s
+ => => transferring context: 1.73kB                                                                                                                                                                                                                                                        0.0s
+ => CACHED [builder 2/6] WORKDIR /app                                                                                                                                                                                                                                                      0.0s
+ => CACHED [builder 3/6] COPY [package.json, package-lock.json, ./]                                                                                                                                                                                                                        0.0s
+ => CACHED [builder 4/6] RUN --mount=type=cache,target=/root/.npm npm ci                                                                                                                                                                                                                   0.0s
+ => [builder 5/6] COPY . .                                                                                                                                                                                                                                                                 0.0s
+ => ERROR [builder 6/6] RUN npm run build                                                                                                                                                                                                                                                  1.6s
+------
+ > [builder 6/6] RUN npm run build:
+0.315 
+0.315 > hospitalproject-client@0.0.0 build
+0.315 > tsc -b && vite build
+0.315 
+1.582 failed to load config from /app/vite.config.ts
+1.585 error during build:
+1.585 Error: Certificate not found.
+1.585     at file:///app/node_modules/.vite-temp/vite.config.ts.timestamp-1775236837411-a2379bebc0ccb8.mjs:15:9
+1.585     at ModuleJob.run (node:internal/modules/esm/module_job:437:25)
+1.585     at async node:internal/modules/esm/loader:639:26
+1.585     at async loadConfigFromBundledFile (file:///app/node_modules/vite/dist/node/chunks/config.js:35909:12)
+1.585     at async bundleAndLoadConfigFile (file:///app/node_modules/vite/dist/node/chunks/config.js:35797:17)
+1.585     at async loadConfigFromFile (file:///app/node_modules/vite/dist/node/chunks/config.js:35764:42)
+1.585     at async resolveConfig (file:///app/node_modules/vite/dist/node/chunks/config.js:35413:22)
+1.585     at async createBuilder (file:///app/node_modules/vite/dist/node/chunks/config.js:33875:19)
+1.585     at async CAC.<anonymous> (file:///app/node_modules/vite/dist/node/cli.js:629:10)
+------
+Dockerfile:9
+--------------------
+   7 |     RUN --mount=type=cache,target=/root/.npm npm ci
+   8 |     COPY . .
+   9 | >>> RUN npm run build
+  10 |     
+  11 |     # FROM nginx:${NGINX_VERSION} AS runner
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c npm run build" did not complete successfully: exit code: 1
+```
+
+It is failing because of how I setup SSL in [vite.config.ts](../HospitalProject.Client/vite.config.ts), so I need to tweak the code a little bit.  
+```ts
+...
+export default defineConfig(({ command }) => {
+  const certName = 'hospitalproject.client';
+  const certFolder = path.join(os.homedir(), 'Workspaces', 'Certs', 'dotnet');
+  const certPath = path.join(certFolder, `${certName}.pem`);
+  const keyPath = path.join(certFolder, `${certName}.key`);  
+
+  if (command === 'serve' && (!existsSync(certPath) || !existsSync(keyPath))) {
+    throw new Error('Certificate not found.');
+  }
+
+  return {
+    plugins: [react()],
+    server: command === 'serve' ? {
+      port: 5173,
+      https: {
+        key: readFileSync(keyPath),
+        cert: readFileSync(certPath)
+      },
+    proxy: {
+      '^/weatherforecast': {
+        target: target,
+        secure: true,
+        agent: new https.Agent({
+          ca: readFileSync(certPath)
+        }),
+        xfwd: true
+      }
+    }
+    } : undefined,
+  }
+});
+``` 
+
+What I have done here passing through the `command` object in `defineConfig(...)` and checking whether the `command` object value `serve` or `build`, if it is `serve` then it should check for certificates and set the server/proxy configuration otherwise, `server` attribute value is set to `undefined` because I want `npm run build` to ignore the server/proxy configuration. If I run the build command again then the build succeeds:  
+```
+> docker build -t hospital.project.client -f HospitalProject.Client/Dockerfile --pull HospitalProject.Client/
+[+] Building 5.6s (12/12) FINISHED                                                                                                                                                                                                                                         docker:desktop-linux
+ => [internal] load build definition from Dockerfile                                                                                                                                                                                                                                       0.0s
+ => => transferring dockerfile: 501B                                                                                                                                                                                                                                                       0.0s
+ => [internal] load metadata for docker.io/library/node:current-alpine                                                                                                                                                                                                                     2.1s
+ => [auth] library/node:pull token for registry-1.docker.io                                                                                                                                                                                                                                0.0s
+ => [internal] load .dockerignore                                                                                                                                                                                                                                                          0.0s
+ => => transferring context: 93B                                                                                                                                                                                                                                                           0.0s
+ => [builder 1/6] FROM docker.io/library/node:current-alpine@sha256:ad82ecad30371c43f4057aaa4800a8ed88f9446553a2d21323710c7b937177fc                                                                                                                                                       0.0s
+ => => resolve docker.io/library/node:current-alpine@sha256:ad82ecad30371c43f4057aaa4800a8ed88f9446553a2d21323710c7b937177fc                                                                                                                                                               0.0s
+ => [internal] load build context                                                                                                                                                                                                                                                          0.0s
+ => => transferring context: 1.85kB                                                                                                                                                                                                                                                        0.0s
+ => CACHED [builder 2/6] WORKDIR /app                                                                                                                                                                                                                                                      0.0s
+ => CACHED [builder 3/6] COPY [package.json, package-lock.json, ./]                                                                                                                                                                                                                        0.0s
+ => CACHED [builder 4/6] RUN --mount=type=cache,target=/root/.npm npm ci                                                                                                                                                                                                                   0.0s
+ => [builder 5/6] COPY . .                                                                                                                                                                                                                                                                 0.0s
+ => [builder 6/6] RUN npm run build                                                                                                                                                                                                                                                        2.7s
+ => exporting to image                                                                                                                                                                                                                                                                     0.7s
+ => => exporting layers                                                                                                                                                                                                                                                                    0.1s
+ => => exporting manifest sha256:2e06f73873d624f992c02e3121db116a92db0a7b959c81c6e7875292d18acba5                                                                                                                                                                                          0.0s
+ => => exporting config sha256:40131840dc0a8bbb63d19db37c072e2a8a961e3eb385112495c5e91caea6471d                                                                                                                                                                                            0.0s
+ => => exporting attestation manifest sha256:54683bc2596b006709f428744f689f1ba8c6fa65af714f0f462c56fc64ed868f                                                                                                                                                                              0.0s
+ => => exporting manifest list sha256:d2b9df2023bf7619f232809a2ec1807a83d5ebf54c914babd9b90b6ae54ff260                                                                                                                                                                                     0.0s
+ => => naming to docker.io/library/hospital.project.client:latest                                                                                                                                                                                                                          0.0s
+ => => unpacking to docker.io/library/hospital.project.client:latest
+```
+
+And if you create the container from the image without passing any parameters and check the Debug tab in the container, you can see the the files being copied over excluding the files and folders mentioned in [.dockerignore](../HospitalProject.Client/.dockerignore).  
+```
+         ▄                                                                                                                
+     ▄ ▄ ▄  ▀▄▀                                                                                                           
+   ▄ ▄ ▄ ▄ ▄▇▀  █▀▄ █▀█ █▀▀ █▄▀ █▀▀ █▀█                                                                                   
+  ▀████████▀    █▄▀ █▄█ █▄▄ █ █ ██▄ █▀▄                                                                                   
+   ▀█████▀                        DEBUG                                                                                   
+                                                                                                                          
+Builtin commands:                                                                                                         
+- install [tool1] [tool2] ...    Add Nix packages from: https://search.nixos.org/packages                                 
+- uninstall [tool1] [tool2] ...  Uninstall NixOS package(s).                                                              
+- entrypoint                     Print/lint/run the entrypoint.                                                           
+- builtins                       Show builtin commands.                                                                   
+                                                                                                                          
+Checks:                                                                                                                   
+✓ distro:            Alpine Linux v3.23                                                                                   
+✓ entrypoint linter: no errors (run 'entrypoint' for details)                                                             
+                                                                                                                          
+Note: This is a sandbox shell. All changes will not affect the actual container.                                          
+                                                                                                           Version: 0.0.47
+root@714d2f6d22e8 /app [sad_mccarthy]
+docker > ls 
+dist              index.html    package-lock.json  public  tsconfig.app.json  tsconfig.node.json
+eslint.config.js  node_modules  package.json       src     tsconfig.json      vite.config.ts
+root@714d2f6d22e8 /app [sad_mccarthy]
+```
+
+### NGIX configuration
+The next part which is for NGINX image is pretty straight forward:  
+```dockerfile
+FROM nginx:${NGINX_VERSION} AS runner
+COPY --chown=nginx:nginx --from=builder /app/dist /usr/share/nginx/html
+USER nginx
+EXPOSE 443
+ENTRYPOINT ["nginx", "-c", "/etc/nginx/nginx.conf"]
+CMD ["-g", "daemon off;"]
+``` 
+
+So for the NGINX image, copying the **/app/dist** directory from the NodeJS build into **/usr/share/nginx/html** with all of its content owner and group to nginx. And NGINX runs under the nginx user, with port exposed to 443 and running nginx with my config file, although I did not copy the config file and just mounting it onto the image from my machine locally when I create and run the container via command line (which I will show shortly). 
+
+But before I start running the container, I want to discuss the **nginx.conf** or [staging.nginx.conf](../HospitalProject.Client/staging.nginx.conf) from the host directory.  
+```
+worker_processes auto;
+
+pid /tmp/nginx.pid;
+
+events {}
+
+http {
+    include /etc/nginx/mime.types;
+
+    server
+    {
+        listen 443 ssl;
+        http2 on;
+        server_name localhost;
+
+        client_body_temp_path   /tmp/client_temp;
+        proxy_temp_path         /tmp/proxy_temp;
+        fastcgi_temp_path       /tmp/fastcgi_temp;
+        uwsgi_temp_path         /tmp/uwsgi_temp;
+        scgi_temp_path          /tmp/scgi_temp;
+
+        ssl_certificate         /etc/nginx/certs/hospitalproject.client.pem;
+        ssl_certificate_key     /etc/nginx/certs/hospitalproject.client.key;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        location /weatherforecast {
+            proxy_pass https://172.17.0.2:5229;
+
+            proxy_set_header Host               $host;
+            proxy_set_header X-Forwarded-Proto  $scheme;
+            proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+
+            proxy_ssl_verify              off;
+            proxy_ssl_trusted_certificate /etc/nginx/certs/hospitalproject.server.pem;
+        }
+    }
+}
+```
+
+This is actually the bear minimum that I need to run both NGIX and ReactJS, worker process (4 cores on linux) and worker connections (512 worker connections) are pretty much defaulting to the NGIX default values. The server is using SSL with HTTP2 with the server name being **localhost**. And I also had to add `include /etc/nginx/mime.types;` otherwise the server does not dish out the CSS, HTML and JavaScript files to the browser. Before adding the following configuration to the file. NGIX failed to start because it needed these directories:  
+```
+        client_body_temp_path   /tmp/client_temp;
+        proxy_temp_path         /tmp/proxy_temp;
+        fastcgi_temp_path       /tmp/fastcgi_temp;
+        uwsgi_temp_path         /tmp/uwsgi_temp;
+        scgi_temp_path          /tmp/scgi_temp;
+```
+
+Just removing the last entry `scgi_temp_path /tmp/scgi_temp;`, would give you this error:   
+```cmd
+2026/04/04 01:11:15 [emerg] 1#1: mkdir() "/var/cache/nginx/scgi_temp" failed (13: Permission denied)
+nginx: [emerg] mkdir() "/var/cache/nginx/scgi_temp" failed (13: Permission denied)
+```
+
+It is trying to create a docker in **/var/cache/nginx/scgi_temp** but failing that is why I've pointed everything to the **/tmp** directory and this error message is very similar if not almost the same as the preceding configurations before it. As you can see I'm binding SSL certificates to the frontend but I have disabled SSL certification for my ASP.NET Core API endpoint with `proxy_ssl_verify off;` and the URL contains the IP address of the ASP.NET Core web API endpoint. 
+
+I had to do this because I just wanted to make sure that my docker containers were talking to each other which they are! Next, I will need to do some networking configurations, and generating custom certificates (using the OpenSSL tool to do) and then enable SSL verification. But right now, I need to rebuild my image.  
+```cmd
+> docker build -t hospital.project.client -f HospitalProject.Client/Dockerfile --pull HospitalProject.Client/
+[+] Building 2.2s (16/16) FINISHED                                                                                                                                                                                                                                         docker:desktop-linux
+ => [internal] load build definition from Dockerfile                                                                                                                                                                                                                                       0.0s
+ => => transferring dockerfile: 489B                                                                                                                                                                                                                                                       0.0s
+ => [internal] load metadata for docker.io/library/node:current-alpine                                                                                                                                                                                                                     1.9s
+ => [internal] load metadata for docker.io/library/nginx:stable-alpine                                                                                                                                                                                                                     1.9s
+ => [auth] library/node:pull token for registry-1.docker.io                                                                                                                                                                                                                                0.0s
+ => [auth] library/nginx:pull token for registry-1.docker.io                                                                                                                                                                                                                               0.0s
+ => [internal] load .dockerignore                                                                                                                                                                                                                                                          0.0s
+ => => transferring context: 93B                                                                                                                                                                                                                                                           0.0s
+ => [builder 1/6] FROM docker.io/library/node:current-alpine@sha256:ad82ecad30371c43f4057aaa4800a8ed88f9446553a2d21323710c7b937177fc                                                                                                                                                       0.0s
+ => => resolve docker.io/library/node:current-alpine@sha256:ad82ecad30371c43f4057aaa4800a8ed88f9446553a2d21323710c7b937177fc                                                                                                                                                               0.0s
+ => [internal] load build context                                                                                                                                                                                                                                                          0.0s
+ => => transferring context: 622B                                                                                                                                                                                                                                                          0.0s
+ => [runner 1/2] FROM docker.io/library/nginx:stable-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236                                                                                                                                                        0.0s
+ => => resolve docker.io/library/nginx:stable-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236                                                                                                                                                               0.0s
+ => CACHED [builder 2/6] WORKDIR /app                                                                                                                                                                                                                                                      0.0s
+ => CACHED [builder 3/6] COPY [package.json, package-lock.json, ./]                                                                                                                                                                                                                        0.0s
+ => CACHED [builder 4/6] RUN --mount=type=cache,target=/root/.npm npm ci                                                                                                                                                                                                                   0.0s
+ => CACHED [builder 5/6] COPY . .                                                                                                                                                                                                                                                          0.0s
+ => CACHED [builder 6/6] RUN npm run build                                                                                                                                                                                                                                                 0.0s
+ => CACHED [runner 2/2] COPY --chown=nginx:nginx --from=builder /app/dist /usr/share/nginx/html                                                                                                                                                                                            0.0s
+ => exporting to image                                                                                                                                                                                                                                                                     0.1s
+ => => exporting layers                                                                                                                                                                                                                                                                    0.0s
+ => => exporting manifest sha256:de51bd7defe3fdbf22ffab9477b88101cf6fc94503cb5ea227ab0141c4131221                                                                                                                                                                                          0.0s
+ => => exporting config sha256:86a639840d160b15458417404f6de67d0192514b79dc152fa023f5aace0dd216                                                                                                                                                                                            0.0s
+ => => exporting attestation manifest sha256:a8ef689e8b613c96a26a1f038286c8c21c54ee202fc39f2b05686b56e7cf743a                                                                                                                                                                              0.0s
+ => => exporting manifest list sha256:ba681b789250398ceb1fac6debb200c26e90dc7cc379145011cbed53c7d1c0a4                                                                                                                                                                                     0.0s
+ => => naming to docker.io/library/hospital.project.client:latest                                                                                                                                                                                                                          0.0s
+ => => unpacking to docker.io/library/hospital.project.client:latest     
+```
+
+And then going to create and run my docker image.  
+```
+> docker run -d -p 127.0.0.1:443:443 \                                                                     
+-v ~/Projects/HospitalProject/HospitalProject.Client/staging.nginx.conf:/etc/nginx/nginx.conf:ro \
+-v ~/Workspaces/Certs/dotnet/hospitalproject.client.key:/etc/nginx/certs/hospitalproject.client.key:ro \
+-v ~/Workspaces/Certs/dotnet/hospitalproject.client.pem:/etc/nginx/certs/hospitalproject.client.pem:ro \
+-v ~/Workspaces/Certs/dotnet/hospitalproject.server.pem:/etc/nginx/certs/hospitalproject.server.pem:ro \
+hospital.project.client
+878fcd247a623247d76d072d34a143c675634d05fb39e15a00b0f952b776ed50
+```
+
+Again, all the certificates and the NGINX configuration files are being mounted onto the container. And since all the certificates are generated with the dotnet tool I just copied **hospitalproject.client.pem** and renamed it to **hospitalproject.server.pem**.
+
+In Docker desktop, in the Debug tab of the front end app. I can see the contents of my ReactJS app that `npm run build` command generated in the **/usr/share/nginx/html** directory.  
+```
+/ $ ls /usr/share/nginx/html
+50x.html    assets      index.html  vite.svg
+/ $ ls /usr/share/nginx/html/assets
+index-BfOgabEj.js   index-COcDBgFa.css  react-CHdo91hT.svg
+```
+
+And then when loading the page on the browser, I can see NGIX is capturing the request.  
+```
+172.17.0.1 - - [04/Apr/2026:01:45:44 +0000] "GET /weatherforecast HTTP/2.0" 200 387 "https://127.0.0.1/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+```
+
+And so is the ASP.NET Core container.  
+```
+2026-04-04 01:46:10 [INF] Application started! Logging to both console and/or file.
+2026-04-04 01:46:10 [WRN] Overriding HTTP_PORTS '8080' and HTTPS_PORTS ''. Binding to values defined by URLS instead 'https://+:5229'.
+2026-04-04 01:46:10 [INF] Now listening on: https://[::]:5229
+2026-04-04 01:46:10 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-04 01:46:10 [INF] Hosting environment: Staging
+2026-04-04 01:46:10 [INF] Content root path: /app
+2026-04-04 01:46:17 [INF] Request starting HTTP/1.0 GET https://localhost/weatherforecast - null null
+2026-04-04 01:46:17 [INF] Request:
+Protocol: HTTP/1.0
+Method: GET
+Scheme: https
+PathBase: 
+Path: /weatherforecast
+Accept: */*
+Connection: close
+Host: localhost
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36
+Accept-Encoding: gzip, deflate, br, zstd
+Accept-Language: en-GB,en-US;q=0.9,en;q=0.8
+Referer: https://127.0.0.1/
+X-Forwarded-Proto: [Redacted]
+X-Forwarded-For: [Redacted]
+sec-ch-ua-platform: "macOS"
+sec-ch-ua: "Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"
+sec-ch-ua-mobile: ?0
+sec-fetch-site: same-origin
+sec-fetch-mode: cors
+sec-fetch-dest: empty
+priority: u=1, i
+```
+
+In the ASP.NET Core logs, I can see `X-Forwarded-Proto` and `X-Forwarded-For` are being pass through but it is not getting processed and this is most likely due to SSL verification being disabled and the connection is HTTP 1.0 but I want HTTP 2.0, I'll tackle these next along with the networking & custom SSL certificate generation next.
+
+# Docker Networking and Custom SSL configuration
+What I want to do now is a create a subnet where both ASP.NET Core backend and the NGINX front end running in the subnet and then only expose the NGIX frontend. I will say that you might not need to do SSL bindings and verification for the ASP.NET Core backend since everything is being reversed proxied from the frontend and the backend is not exposed. 
+
+Sure if the web stack was running on a VM not on Docker, you will need to do additional network/firewall configuration and expose the API endpoint. But I'm doing it firstly, for the sake of doing it 😜 and secondly, I guess if the company or organisation is security conscious heavy they would still want to encrypt the communication and maximise their security resilience.
+
+## Create Docker Networking Bridge Adapter
+First things first, I'm going to create a Docker networking bridge adapter with the subnet using private class A IP address range of `10.0.0.0/24`, which should give me 254 IP addresses with the following command.  
+```
+> docker network create \
+  --driver bridge \
+  --subnet 10.0.0.0/28 \
+  --gateway 10.0.0.1 \
+  hospital-network
+08d6cde7561967a7483e8c04602dd98ec71ff0e1fba57901623560433b97517b
+
+> docker network ls
+NETWORK ID     NAME               DRIVER    SCOPE
+2204768764b3   bridge             bridge    local
+08d6cde75619   hospital-network   bridge    local
+b05970dd2650   host               host      local
+ac6cf5a7474b   none               null      local
+```
+
+With the `docker network ls` command, just confirming that the network bridge adapter is created. Running `docker network inspect hospital-network` command, I got 13 usable IP addresses, 3 of them used up due for IP Gateway, IP Broadcast and IP Network addresses.  
+```
+> docker network inspect hospital-network
+[
+    {
+        "Name": "hospital-network",
+        "Id": "8fd1c57688843574d9d25269d936e53bf8f38777c9791c54b66669d00757d193",
+        "Created": "2026-04-04T09:13:19.587354719Z",
+        "Scope": "local",
+        "Driver": "bridge",
+        "EnableIPv4": true,
+        "EnableIPv6": false,
+        "IPAM": {
+            "Driver": "default",
+            "Options": {},
+            "Config": [
+                {
+                    "Subnet": "10.0.0.0/28",
+                    "Gateway": "10.0.0.1"
+                }
+            ]
+        },
+        "Internal": false,
+        "Attachable": false,
+        "Ingress": false,
+        "ConfigFrom": {
+            "Network": ""
+        },
+        "ConfigOnly": false,
+        "Options": {
+            "com.docker.network.enable_ipv4": "true",
+            "com.docker.network.enable_ipv6": "false"
+        },
+        "Labels": {},
+        "Containers": {},
+        "Status": {
+            "IPAM": {
+                "Subnets": {
+                    "10.0.0.0/28": {
+                        "IPsInUse": 3,
+                        "DynamicIPsAvailable": 13
+                    }
+                }
+            }
+        }
+    }
+]
+```
+
+Before I start running the Docker containers, I'm going to generate the SSL certificates, since both backend and frontend.
+
+## Custom Self-Signed SSL Certificates
+For both front end and backend, I'm going to generating an X509 certificate, this is due the certificates being self signed.
+
+But I still need to add the CA certificate regardless to the macOS trust store in order to get rid of the SSL error message that appears on the browser.
+
+### Custom CA for SSL Certificates
+So the first thing I need to do, is use [HospitalProject.ca.conf](../HospitalProject.ca.conf) to generate the CA certificates.  
+```
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions    = v3_ca
+prompt             = no
+
+[req_distinguished_name]
+CN = HospitalProjectCA
+
+[v3_ca]
+basicConstraints = critical, CA:true
+keyUsage         = critical, keyCertSign, cRLSign
+nameConstraints  = critical, permitted;DNS:localhost,permitted;DNS:hospitalproject.api.local,permitted;DNS:hospitalproject.local
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always, issuer
+```
+
+The CA name is *HospitalProjectCA* and I'm restricting the CA to generate other certificate based on the subnet that I setup for Docker earlier and also permitting localhost and the DNS names that I will set when launching the containers (since I need to connect the React app from the browser). 
+
+In the `req` section, the `distinguished_name` is set from the `req_distinguished_name` section which is the Common Name (`CN`), the `x509_extensions` values comes froms the `v3_ca` and `promp = no` means no interactive prompting.
+
+In the `v3_ca` section: 
+* `basicConstraints` set to `CA:true` means that the certificate is marked for Certificate Authority.
+* `keyCertSign` signifies that the CA will be signing certificates and `cRLSign` signifies that it grants the CA the ability to sign the Certificate Revocation List (CRL) itself, since I don't have the CRL infrastructure setup (and I can't on my MacBook Air at least, otherwise my laptop will die 😅). I need to generate the key for my CA certificate.
+* `nameConstraints` basically restricts the scope of a CA certificate to the DNS names that I have provided. 
+* `subjectKeyIdentifier` is an extension that provides a means to identifying certificates that contains of the public key. Since I am generating a CA certificate OpenSSL will generate a 160-bit SHA-1 hash of the BIT STRING value of the subject public key, excluding the tag, length, and number of unused bits.
+* `authorityKeyIdentifier` is the configuration that mandates that the Authority Key Identifier (AKI) extension must include the Key ID, while the Issuer name and serial number are included only if the certificate is not self-signed. And this is the case since this certificate is a certificate authority. 
+
+Another thing to note is `basicConstraints`, `keyUsage` and `nameConstraints` has the `critical` flag, what this means that it cannot be ignored by the validator, if the certificate is not a CA.
+
+```
+> openssl genrsa -out ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key 2048
+```
+
+For production, I would have password encrypted the key with either -aes256 or -des3 flag, but since this is staging and I'm doing this on my machine only, I decided not to (and it becomes a hassal later). 
+
+Once the key file is generated, next I need to generate the certificate using the [HospitalProject.ca.conf](../HospitalProject.ca.conf) file.
+```
+> openssl req -x509 -new -nodes \
+  -key ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key \
+  -sha256 -days 365 \
+  -config ~/Projects/HospitalProject/HospitalProject.ca.conf \
+  -out ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
+```
+
+So now, both the certificate files are generated.
+```
+> ls ~/Workspaces/Certs/hospital.project/ca 
+HospitalProject.CA.key  HospitalProject.CA.pem
+```
+
+And just to verify, everything from the config file was applied.  
+```
+> openssl x509 -in ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem -noout -text | grep -A 6 "X509v3"
+        X509v3 extensions:
+            X509v3 Basic Constraints: critical
+                CA:TRUE
+            X509v3 Key Usage: critical
+                Certificate Sign, CRL Sign
+            X509v3 Name Constraints: critical
+                Permitted:
+                  DNS:localhost
+                  DNS:hospitalproject.api.local
+                  DNS:hospitalproject.local
+            X509v3 Subject Key Identifier:
+                ...
+            X509v3 Authority Key Identifier:
+                keyid:...
+                DirName:/CN=HospitalProjectCA
+                serial:...
+    Signature Algorithm: sha256WithRSAEncryption
+    Signature Value:
+        ...
+```
+
+### Adding CA Certificate macOS trust store
+To add the CA certificate to the macOS trust store, run the following command.  
+```
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain \
+  ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
+```
+
+And I can see the certificate in the trust store now.
+![](./images/Screenshot%202026-04-05%20at%2012.40.30 am.png)
+
+### Adding CA Certificate NSSDB (Ubuntu)
+On Ubuntu, I use Chromium based browsers like Google Chrome or Brave and both of them use NSSDB, which sits in **~/.pki/nssdb** and also you need **certutil** tool as well to install the certificate (with command `sudo apt update && sudo apt install libnss3-tools`). I already have **certutil** already installed and then ran this command.  
+```
+> certutil -A \
+  -d ~/.pki/nssdb \
+  -n "HospitalProjectCA" \
+  -t "CT,," \
+  -i ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
+```
+
+If you view your certificates in NSSDB, run this command:
+```
+> certutil -L -d ~/.pki/nssdb
+Certificate Nickname                                         Trust Attributes
+                                                             SSL,S/MIME,JAR/XPI
+
+aspnetcore-localhost-{SOME_HASH}                             P,,  
+HospitalProjectCA                                            CT,, 
+```
+
+And to remove it, run this command:
+```
+> certutil -D -d ~/.pki/nssdb -n "HospitalProjectCA"
+```
+
+Once installed you should be able to see it in:
+* Brave Browser under **brave://certificate-manager/localcerts/platformcerts**
+* Google Chrome under **chrome://certificate-manager/localcerts/platformcerts**
+
+
+### ASP.NET Core Web API SSL Certificate
+Firstly, [hospitalproject.server.cert.conf](../HospitalProject.Server/hospitalproject.server.cert.conf) is the config file that I will use to generate the self signed certificate for the backend.  
+```
+[req]
+default_bits       = 2048
+default_md         = sha256
+distinguished_name = req_distinguished_name
+req_extensions     = v3_req
+prompt             = no
+
+[req_distinguished_name]
+CN = hospitalproject.api.local
+
+[v3_req]
+subjectAltName       = @alt_names
+basicConstraints     = CA:false
+keyUsage             = digitalSignature
+extendedKeyUsage     = serverAuth
+subjectKeyIdentifier = hash
+
+[v3_sign]
+subjectAltName         = @alt_names
+basicConstraints       = CA:false
+keyUsage               = digitalSignature
+extendedKeyUsage       = serverAuth
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always, issuer
+
+[alt_names]
+DNS.1 = hospitalproject.api.local
+```
+
+So `default_bits`, I left it small, the bigger the number the more processing the CPU will do. By setting the Subject Alternative Names, it ensures that the that DNS entry needs to have the name *hospitalproject.api.local*. I didn't really have to put the `distinguished_name`. But there are two sections `v3_req`, this section will be used for generating the CSR and the `v3_sign` section is going to be used for the certificate signing. `v3_req` does not have `authorityKeyIdentifier` identifier in it because when generating the CSR it will throw an error because OpenSSL does not have CA to reference. When signing the certificate then I'm able to reference the CA certificate. 
+
+Just going onto the other attributes and values `subjectKeyIdentifier = hash` will drive the key identifier from the public key that's gets generated. And `authorityKeyIdentifier = keyid:always, issuer` will add reference to the CA with the key id and issuer CN name.
+
+`keyUsage = digitalSignature` means the following `digitalSignature` the server will sign with DHE/ECDHE Cipher Suites and the client/browser will verify the signature with the public key in the certificate and then use it in its message exchanges. This is more secure than using `keyEncipherment` because the public that the browser/client gets is in plain text. 
+
+`extendedKeyUsage = serverAuth`, this is just normal TLS communication between server and client/browser where `serverAuth` means it can be used to authenticate a server. If I added `clientAuth` to `extendedKeyUsage` then it will become a mTLS certificate.
+
+`subjectAltName` is referencing the `alt_names` section with the `@alt_names` attribute.
+
+
+Now I'm going to generate the command for generating the CSR and private key for the ASP.NET Core backend, with the config file [hospitalproject.server.cert.conf](../HospitalProject.Server/hospitalproject.server.cert.conf).
+```
+> openssl req -new \
+  -newkey rsa:2048 \
+  -nodes \
+  -keyout ~/Workspaces/Certs/hospital.project/hospital.project.server.key \
+  -config ~/Projects/HospitalProject/HospitalProject.Server/hospitalproject.server.cert.conf \
+  -out ~/Workspaces/Certs/hospital.project/hospital.project.server.csr
+..+......+......+...+......+......+.+...............+...+..+.......+..+++++++++++++++++++++++++++++++++++++++*...................+.....+....+...+..+.+.....+.........+......+.........+...+.........+.+..+++++++++++++++++++++++++++++++++++++++*...+.....+.+.....+...+.+......+.....+.+.....+.........+.+...+..+...+......+....+......+.....+..........+...+.....+...+...+..........+...............+..+...+.+...+...........+....+...............+.....+..........+......+.....+.......+............+...+..+................+..+..........+.....+....++++++
+..+...+.......+.....+..........+......+..+...+...+......+...+.+......+......+++++++++++++++++++++++++++++++++++++++*.+........+...+...+.+++++++++++++++++++++++++++++++++++++++*....+.+..+.............+...+...........+...............+...+.......+...+...........+....+..+.........+......+.+............+...............+...+.....+.......+..+...+...+.........+......+............+.+.....+.......+..+......+......+.........+.......+..+.......+.....+.+.................+...+.........+...+...+............+...+...+.+......+...+...............+..+...+......+......+...+....+......+..+.......+......+.........+.....+.+..............+...+.......+.....................+..+....+.....+.+.....+..........+...............+.........+........+..........+...+........+.+.....+.........+.....................+.........+..........+.........+..+...+.+.........+..+......+.......+......+............+..+.............+.....+....+...+.....+.......+.....+.+...+..+.........+...+.+.....................+...+......+..+...+.+.....+...+.+....................+....+..+...+......+.+...+...+...+.........+..+.+.....+............+.+.........+........+....+.....+.+...+...........+...+.+.........+............+.........+..+..........+...+.............................+...+..........+..+.+...........+.+..++++++
+-----
+```
+
+Lastly, I'm going to self sign the certificate and generate the PEM (Privacy-Enhanced Mail) certificate for ASP.NET Core backend. But I'm going to pass in the `v3_sign` section because then I can reference the CA.   
+```
+> openssl x509 -req \
+  -in ~/Workspaces/Certs/hospital.project/hospital.project.server.csr \
+  -CA ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem \
+  -CAkey ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key \
+  -CAcreateserial \
+  -days 365 \
+  -sha256 \
+  -extfile ~/Projects/HospitalProject/HospitalProject.Server/hospitalproject.server.cert.conf \
+  -extensions v3_sign \
+  -out ~/Workspaces/Certs/hospital.project/hospital.project.server.pem
+Certificate request self-signature ok
+subject=CN=hospitalproject.api.local
+```
+
+All done, all the certificate. for the server is now generated.  
+```
+> ls ~/Workspaces/Certs/hospital.project 
+ca     hospital.project.server.csr     hospital.project.server.key     hospital.project.server.pem
+```
+
+And I'm going to verify everything is all good with the CA and my server certificate.  
+```
+> openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem \
+  ~/Workspaces/Certs/hospital.project/hospital.project.server.pem
+/Users/zamk/Workspaces/Certs/hospital.project/hospital.project.server.pem: OK
+```
+
+And the SANs and all the other attributes that I specified in the `v3_req` & from the `v3_sign` section the CA along with `authorityKeyIdentifier` information is also are on the certificate.  
+```
+> openssl x509 -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pem -noout -text | grep -E -A 3 '(X509v3|Serial Number|Issuer)'
+        Serial Number:
+            ...
+        Signature Algorithm: sha256WithRSAEncryption
+        Issuer: CN = HospitalProjectCA
+        Validity
+            Not Before: Apr  8 06:10:38 2026 GMT
+            Not After : Apr  8 06:10:38 2027 GMT
+--
+        X509v3 extensions:
+            X509v3 Subject Alternative Name:
+                DNS:hospitalproject.api.local
+            X509v3 Basic Constraints:
+                CA:FALSE
+            X509v3 Key Usage:
+                Digital Signature
+            X509v3 Extended Key Usage:
+                TLS Web Server Authentication
+            X509v3 Subject Key Identifier:
+                ...
+            X509v3 Authority Key Identifier:
+                ...
+    Signature Algorithm: sha256WithRSAEncryption
+    Signature Value:
+```
+
+### ReactJS and NGINX Frontend SSL Certificate
+Now for the front end the [hospitalproject.client.cert.conf](../HospitalProject.Client/hospitalproject.client.cert.conf) will be used to generate the certificates. The configuration for this certificate is almost identifical to [hospitalproject.server.cert.conf](../HospitalProject.Server/hospitalproject.server.cert.conf) except, I've added the localhost name and ip adddress in the `alt_names` section.
+
+And I'm going to use the same commands that I used for generating the certificates for the ASP.NET Core backend.  
+```
+[req]
+default_bits       = 2048
+default_md         = sha256
+distinguished_name = req_distinguished_name
+req_extensions     = v3_req
+prompt             = no
+
+[req_distinguished_name]
+CN = hospitalproject.local
+
+[v3_req]
+subjectAltName       = @alt_names
+basicConstraints     = CA:false
+keyUsage             = digitalSignature
+extendedKeyUsage     = serverAuth
+subjectKeyIdentifier = hash
+
+[v3_sign]
+subjectAltName         = @alt_names
+basicConstraints       = CA:false
+keyUsage               = digitalSignature
+extendedKeyUsage       = serverAuth
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always, issuer
+
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = hospitalproject.local
+IP.1 = 127.0.0.1
+```
+
+
+Firstly going to generate the CSR and private key.
+```
+> openssl req -new \
+  -newkey rsa:2048 \
+  -nodes \
+  -keyout ~/Workspaces/Certs/hospital.project/hospital.project.client.key \
+  -config ~/Projects/HospitalProject/HospitalProject.Client/hospitalproject.client.cert.conf \
+  -out ~/Workspaces/Certs/hospital.project/hospital.project.client.csr
+........+.+...........+....+......+.....+.+............+++++++++++++++++++++++++++++++++++++++*.+..........+.....+...+..........+...........+.+.........+.....+++++++++++++++++++++++++++++++++++++++*............+..+...+.+...............+.....+......+...+....+...+.........+........+......+....+......+...........+..................+.......+...+...+..+............................+.........+.....+.............+.....+.+.........+..+..........+...............+...+...............+..++++++
+.........+...+.............+.....+.+.....+...+...+...+....+..+...+++++++++++++++++++++++++++++++++++++++*.........+...+++++++++++++++++++++++++++++++++++++++*..............+.....+......+...+.........+.......+......+........+......+.+..+.+......+...+......+..+...+....+.....+...+..
+```
+
+Next, I'm going to self sign the certificate and generate the certificate and passing in the `v3_sign` section from my configuration file.
+```
+> openssl x509 -req \
+  -in ~/Workspaces/Certs/hospital.project/hospital.project.client.csr \
+  -CA ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem \
+  -CAkey ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key \
+  -CAcreateserial \
+  -days 365 \
+  -sha256 \
+  -extfile ~/Projects/HospitalProject/HospitalProject.Client/hospitalproject.client.cert.conf \
+  -extensions v3_sign \
+  -out ~/Workspaces/Certs/hospital.project/hospital.project.client.pem
+Certificate request self-signature ok
+subject=CN=hospitalproject.local
+```
+Now, both client and server certificates are now generated.  
+```
+> ls ~/Workspaces/Certs/hospital.project 
+ca  hospital.project.client.csr     hospital.project.client.key     hospital.project.client.pem     hospital.project.server.csr     hospital.project.server.key     hospital.project.server.pem
+```
+
+Now, I'm going to validate the certificate with my CA certificate.
+```
+> openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem \
+  ~/Workspaces/Certs/hospital.project/hospital.project.client.pem
+/Users/zamk/Workspaces/Certs/hospital.project/hospital.project.client.pem: OK
+```
+
+The SANs and all the other attributes that I specified in the `v3_req` & from the `v3_sign` section the CA along with `authorityKeyIdentifier` information is also are on the certificate.
+```
+> openssl x509 -in ~/Workspaces/Certs/hospital.project/hospital.project.client.pem -noout -text | grep -E -A 3 '(X509v3|Serial Number|Issuer)'
+        Serial Number:
+            ...
+        Signature Algorithm: sha256WithRSAEncryption
+        Issuer: CN = HospitalProjectCA
+        Validity
+            Not Before: Apr  8 06:31:33 2026 GMT
+            Not After : Apr  8 06:31:33 2027 GMT
+--
+        X509v3 extensions:
+            X509v3 Subject Alternative Name:
+                DNS:localhost, DNS:hospitalproject.local, IP Address:127.0.0.1
+            X509v3 Basic Constraints:
+                CA:FALSE
+            X509v3 Key Usage:
+                Digital Signature
+            X509v3 Extended Key Usage:
+                TLS Web Server Authentication
+            X509v3 Subject Key Identifier:
+                ...
+            X509v3 Authority Key Identifier:
+                ...        
+            Signature Algorithm: sha256WithRSAEncryption                                   
+            Signature Value:
+```
+
+And great, I can also see key usage as well.
+
+## NGINX Config Change & Creating New Docker Container(s)
+Before I create the YAML file for deployment, firstly I updated the [staging.nginx.conf](../HospitalProject.Client/staging.nginx.conf) config file and enabled SSL verification on, also pointed to the CA certificate file that I generated and also updated the URL for the ASP.NET Core backend to what I want the server name to be.  
+```
+...
+        location /weatherforecast {
+            proxy_pass https://hospitalproject.api.local:5229;
+
+            proxy_set_header Host               $host;
+            proxy_set_header X-Forwarded-Proto  $scheme;
+            proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+
+            proxy_ssl_verify              on;
+            proxy_ssl_trusted_certificate /etc/nginx/certs/HospitalProject.CA.pem;
+        }
+...
+```
+
+Everything else remains the same. Next I created both the back and front containers with the following commands. Both contains has a network alias name, assigned to my network bridge adapter and I didn't give containers a name if I did then I'd have to delete the container and then redeploy it, IP addresses manually assign to map the subnet of my network bridge adapter and repointed the certificates to the location of where I generated the certificates with OpenSSL.
+```
+> docker run -d --network hospital-network --ip 10.0.0.3 --network-alias hospitalproject.api.local \
+-e ASPNETCORE_URLS="https://+:5229" \
+-e ASPNETCORE_Kestrel__Certificates__Default__Path=/https/hospital.project.server.pem \
+-e ASPNETCORE_Kestrel__Certificates__Default__KeyPath=/https/hospital.project.server.key \
+-e ASPNETCORE_ENVIRONMENT=Staging \
+-e ASPNETCORE_ForwardedHeaders_Enabled=true \
+-e ASPNETCORE_KnownProxies__0=10.0.0.2 \
+-v ~/Workspaces/Certs/hospital.project/hospital.project.server.pem:/https/hospital.project.server.pem:ro \
+-v ~/Workspaces/Certs/hospital.project/hospital.project.server.key:/https/hospital.project.server.key:ro \
+-v ~/Projects/HospitalProject/HospitalProject.Server/appsettings.Staging.json:/app/appsettings.Staging.json:ro \
+hospital.project.server
+a0bb6b87a96481d0aab1f487db47111a905e7af9199ccfad4508515c8981fe89
+>
+> docker run -d --network hospital-network --ip 10.0.0.2 --network-alias hospitalproject.local -p 443:443 \
+-v ~/Projects/HospitalProject/HospitalProject.Client/staging.nginx.conf:/etc/nginx/nginx.conf:ro \
+-v ~/Workspaces/Certs/hospital.project/hospital.project.client.key:/etc/nginx/certs/hospitalproject.client.key:ro \
+-v ~/Workspaces/Certs/hospital.project/hospital.project.client.pem:/etc/nginx/certs/hospitalproject.client.pem:ro \
+-v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/etc/nginx/certs/HospitalProject.CA.pem:ro \
+hospital.project.client
+470555c55c3a7daa234efbf852ea418ae5b0171f5ceb72bf20c7db034eb4644b
+```
+
+After running the above commands, I can see that the IP address that manually assigned is assigned along with the network alias that I set as well.
+```
+> docker ps
+CONTAINER ID   IMAGE                     COMMAND                  CREATED          STATUS          PORTS                                     NAMES
+ced12cdeb375   hospital.project.client   "nginx -c /etc/nginx…"   17 minutes ago   Up 17 minutes   0.0.0.0:443->443/tcp, [::]:443->443/tcp   fervent_villani
+c3ebc0bc64dd   hospital.project.server   "dotnet HospitalProj…"   19 minutes ago   Up 19 minutes                                             relaxed_proskuriakova
+
+> docker inspect --format '{{json .NetworkSettings}}' relaxed_proskuriakova
+{
+    "SandboxID": "c8ff2a6d9cf05f589d21a5fdf17b104a00006f8a70ea28d9204cb879435914e2",
+    "SandboxKey": "/var/run/docker/netns/c8ff2a6d9cf0",
+    "Ports": {},
+    "Networks": {
+        "hospital-network": {
+            "IPAMConfig": {
+                "IPv4Address": "10.0.0.3"
+            },
+            "Links": null,
+            "Aliases": [
+                "hospitalproject.api.local"
+            ],
+            "DriverOpts": null,
+            "GwPriority": 0,
+            "NetworkID": "8cc9187919c54362d59c4fb68c61338359d3f7d4ad9c2e40ab31e63919150e7f",
+            "EndpointID": "6c742449a1475d99b81a43ccf440a087c4365574bd960bedcb1bfec728501f27",
+            "Gateway": "10.0.0.1",
+            "IPAddress": "10.0.0.3",
+            "MacAddress": "2e:b8:4d:29:27:c2",
+            "IPPrefixLen": 28,
+            "IPv6Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "DNSNames": [
+                "relaxed_proskuriakova",
+                "hospitalproject.api.local",
+                "c3ebc0bc64dd"
+            ]
+        }
+    }
+}
+
+>  docker inspect --format '{{json .NetworkSettings}}' fervent_villani
+{
+    "SandboxID": "bf04f1c518457f7a2703db1fb3f9f815921f340ebe2b1554a3b5986efa71cd06",
+    "SandboxKey": "/var/run/docker/netns/bf04f1c51845",
+    "Ports": {
+        "443/tcp": [
+            {
+                "HostIp": "0.0.0.0",
+                "HostPort": "443"
+            },
+            {
+                "HostIp": "::",
+                "HostPort": "443"
+            }
+        ]
+    },
+    "Networks": {
+        "hospital-network": {
+            "IPAMConfig": {
+                "IPv4Address": "10.0.0.2"
+            },
+            "Links": null,
+            "Aliases": [
+                "hospitalproject.local"
+            ],
+            "DriverOpts": null,
+            "GwPriority": 0,
+            "NetworkID": "8cc9187919c54362d59c4fb68c61338359d3f7d4ad9c2e40ab31e63919150e7f",
+            "EndpointID": "75f03f0b8a93d5d9d2870d39733dbd06c0cce73f78a83a3de295b410152d4390",
+            "Gateway": "10.0.0.1",
+            "IPAddress": "10.0.0.2",
+            "MacAddress": "c2:0e:fb:fb:12:03",
+            "IPPrefixLen": 28,
+            "IPv6Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "DNSNames": [
+                "fervent_villani",
+                "hospitalproject.local",
+                "ced12cdeb375"
+            ]
+        }
+    }
+}
+``` 
+
+For the backend, I'm using the pem and key file certificates that I created and for the frontend I changed the certificate to point to the CA certificate that I have generated and also added two more environment variables which are `ASPNETCORE_ForwardedHeaders_Enabled=true` & `ASPNETCORE_KnownProxies__0=10.0.0.2` so that ASP.NET Core knows it's a trusted proxy and it will process the X-Forward headers like it does when running the ASP.NET core backend and frontend locally with the ViteJS proxy. 
+
+The key difference being I did not have add these environment variables in because ASP.NET Core automatically processes the X-Forward headers when everything is running on docker. Since both containers are running. The requests are coming from browser to NGINX (And I think it's overwritting my XForward Headers configuration in my code but will sort that out later).
+```
+2026-04-05 14:55:57.768 | 10.0.0.1 - - [05/Apr/2026:04:55:57 +0000] "GET /weatherforecast HTTP/2.0" 200 382 "https://localhost/" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+```
+
+And the API calls are getting reversed proxied to ASP.NET Core backend. With the X-Forward Headers being processed.
+```
+2026-04-05 14:55:57.767 | 2026-04-05 04:55:57 [INF] Request starting HTTP/1.0 GET https://localhost/weatherforecast - null null
+2026-04-05 14:55:57.767 | 2026-04-05 04:55:57 [INF] Request:
+2026-04-05 14:55:57.767 | Protocol: HTTP/1.0
+2026-04-05 14:55:57.767 | Method: GET
+2026-04-05 14:55:57.767 | Scheme: https
+2026-04-05 14:55:57.767 | PathBase: 
+2026-04-05 14:55:57.767 | Path: /weatherforecast
+2026-04-05 14:55:57.767 | Accept: */*
+2026-04-05 14:55:57.767 | Connection: close
+2026-04-05 14:55:57.767 | Host: localhost
+2026-04-05 14:55:57.767 | User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36
+2026-04-05 14:55:57.767 | Accept-Encoding: gzip, deflate, br, zstd
+2026-04-05 14:55:57.767 | Accept-Language: en-GB,en-US;q=0.9,en;q=0.8
+2026-04-05 14:55:57.767 | Referer: https://localhost/
+2026-04-05 14:55:57.767 | X-Original-Proto: [Redacted]              <-- X-Forward-Headers being processed HERE
+2026-04-05 14:55:57.767 | sec-ch-ua-platform: "Linux"
+2026-04-05 14:55:57.767 | sec-ch-ua: "Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"
+2026-04-05 14:55:57.767 | sec-ch-ua-mobile: ?0
+2026-04-05 14:55:57.767 | sec-fetch-site: same-origin
+2026-04-05 14:55:57.767 | sec-fetch-mode: cors
+2026-04-05 14:55:57.767 | sec-fetch-dest: empty
+2026-04-05 14:55:57.767 | priority: u=1, i
+2026-04-05 14:55:57.767 | X-Original-For: [Redacted]                <-- X-Forward-Headers being processed HERE
+2026-04-05 14:55:57.767 | 2026-04-05 04:55:57 [INF] Executing endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-04-05 14:55:57.767 | 2026-04-05 04:55:57 [INF] Route matched with {action = "Get", controller = "WeatherForecast"}. Executing controller action with signature System.Collections.Generic.IEnumerable`1[HospitalProject.Server.WeatherForecast] Get() on controller HospitalProject.Server.Controllers.WeatherForecastController (HospitalProject.Server).
+2026-04-05 14:55:57.767 | 2026-04-05 04:55:57 [INF] Executing ObjectResult, writing value of type 'HospitalProject.Server.WeatherForecast[]'.
+2026-04-05 14:55:57.767 | 2026-04-05 04:55:57 [INF] Response:
+2026-04-05 14:55:57.767 | StatusCode: 200
+2026-04-05 14:55:57.767 | Content-Type: application/json; charset=utf-8
+2026-04-05 14:55:57.768 | 2026-04-05 04:55:57 [INF] Executed action HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server) in 0.4679ms
+2026-04-05 14:55:57.768 | 2026-04-05 04:55:57 [INF] Executed endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-04-05 14:55:57.768 | 2026-04-05 04:55:57 [INF] ResponseBody: [{"date":"2026-04-06","temperatureC":29,"temperatureF":84,"summary":"Cool"},{"date":"2026-04-07","temperatureC":34,"temperatureF":93,"summary":"Chilly"},{"date":"2026-04-08","temperatureC":28,"temperatureF":82,"summary":"Balmy"},{"date":"2026-04-09","temperatureC":49,"temperatureF":120,"summary":"Mild"},{"date":"2026-04-10","temperatureC":15,"temperatureF":58,"summary":"Chilly"}]
+2026-04-05 14:55:57.768 | 2026-04-05 04:55:57 [INF] Duration: 0.7618ms
+2026-04-05 14:55:57.768 | 2026-04-05 04:55:57 [INF] HTTP GET /weatherforecast responded 200 in 0.7975 ms
+2026-04-05 14:55:57.768 | 2026-04-05 04:55:57 [INF] Request finished HTTP/1.0 GET https://localhost/weatherforecast - 200 null application/json; charset=utf-8 1.1084ms
+```
+
+Now the good thing is the ASP.NET Core backend is no longer exposed and it is only accessible through Docker and the reverse proxy (I put **https://localhost:5173**, but ASP.NET Core ignores the port number and allows the API call to happen from port 443) and there's a reason for this, which I will discuss later.
+
+However, for the frontend certificate I also put the another DNS name as well. So first things first. I'm going to update [staging.nginx.conf](../HospitalProject.Client/staging.nginx.conf).
+```
+...
+http {
+    include /etc/nginx/mime.types;
+
+    server
+    {
+        listen 443 ssl;
+        http2 on;
+        server_name localhost hospitalproject.local;
+        ...
+    }
+    ...
+}
+```
+
+If I try to **https://hospitalproject.local**, it doesn't work.  
+![hospitalproject.local doesn't work](./images/Screenshot%20from%202026-04-05%2015-15-17.png)
+
+But accessing by the localhost URL does. So on my host machine, I need to add a DNS entry to resolve to the localhost IP address (127.0.0.1).
+
+## Adding DNS entry for hospitalproject.local
+The easiest way would be just to add an entry to your **/etc/hosts** file (On Ubuntu and MacOS), which I have already done.  
+```
+> sudo tee -a /etc/hosts << 'EOF'
+# Docker Container Lookup
+127.0.0.1       hospitalproject.local
+# End of Section
+EOF
+```
+
+Because I've exposed port 443 on Docker, a NAT transation is automatically done to docker. And now the page is loading.
+![hospitalproject.local is working now](./images/Screenshot%20from%202026-04-05%2016-01-21.png)
+
+But now I need to do some clean up before I create YAML files for full build and deployment. 
+
+# Clean up before proper deployment
+## Logging Out the environment name
+I just thought to log out the environment name because I have some ah-duh moments 😅.
+```csharp
+    ...
+    app.UseSerilogRequestLogging();
+    Log.Information("Application started! Logging to both console and/or file.");
+    Log.Information($"Running Environment : {app.Environment.EnvironmentName}");
+    ...
+```
+
+## Forward Headers and Known Proxies
+When I created the ASP.NET Core container, I set alot of environment variables especially these two stood out to me being a little bit problematic:  
+```
+...
+-e ASPNETCORE_ForwardedHeaders_Enabled=true \
+-e ASPNETCORE_KnownProxies__0=10.0.0.2 \
+...
+```
+
+From the Reading that I have done, it seems that these parameters ignores the Forward Headers middleware that I have coded, so this and other Kestrel related configuration will be coded and/or passed in from the **appsettings.json** file(s).
+
+As mentioned in the previous section, instead of passing environment variables for enabling forward headers and adding known proxies, I'm going to pass it through from **appsettings.json**. Before I pass it through, I need to add some code in [Program.cs](../HospitalProject.Server/Program.cs).
+
+
+If it's development then use the what I orignally set otherwise for everything else get it from the config file. And Within the [appsettings.Staging.json](../HospitalProject.Server/appsettings.Staging.json), this is the config that I've set for Forward Headers.
+```json
+...
+  "ForwardedHeaders": {
+    "ForwardedHeaderOptions": "XForwardedFor,XForwardedProto",
+    "KnownProxies": [ "10.0.0.2" ]
+  }
+...
+```
+
+`ForwardedHeaderOptions` is just a comma separate string, which my code will split and trim the values and then "use" which I will discuss in a little bit and then `KnownProxies` is just an array of IP address but this is optional. I've actually created an extension class and methods for parsing in the values from **appsetting.json** file. Before I discuss the extension class, I want to discuss [Program.cs](../HospitalProject.Server/Program.cs).
+```csharp
+using HospitalProject.Server.Extensions;
+using Microsoft.AspNetCore.HttpLogging;
+using Serilog;
+
+...
+try
+{
+
+    if (builder.Environment.IsDevelopment() || builder.Environment.IsStaging())
+    {
+        builder.Services.AddHttpLogging(o => { 
+            o.LoggingFields = HttpLoggingFields.All; 
+            o.RequestHeaders.Add("Referer");
+            o.RequestHeaders.Add("sec-ch-ua-platform");
+            o.RequestHeaders.Add("sec-ch-ua");
+            o.RequestHeaders.Add("sec-ch-ua-mobile");
+            o.RequestHeaders.Add("sec-fetch-site");
+            o.RequestHeaders.Add("sec-fetch-mode");
+            o.RequestHeaders.Add("sec-fetch-dest");
+            o.RequestHeaders.Add("priority");
+            o.RequestHeaders.Add("X-Forwarded-For");
+            o.RequestHeaders.Add("X-Forwarded-Proto");
+            o.RequestHeaders.Add("X-Original-For");
+            o.RequestHeaders.Add("X-Original-Proto");
+        }); 
+    }
+    ...
+    builder.Services.AddForwardHeaderOptionsConfiguration(builder.Configuration, builder.Environment);
+    ...
+
+    var app = builder.Build();
+
+    app.UseForwardedHeaders();
+
+    app.UseSerilogRequestLogging();
+    Log.Information("Application started! Logging to both console and/or file.");
+    app.LogForwardHeaderOptionsConfiguration();
+
+    if (app.Environment.IsDevelopment() || app.Environment.IsStaging())
+    {
+        app.UseHttpLogging();
+        app.MapOpenApi();
+    }
+    ...
+
+    app.Run();
+}
+...
+```
+
+First of all, I added Forward Headers for HTTP logging so that the `X-Original-Proto` and `X-Original-For` values are exposed, but only for development and staging environments. 
+```csharp
+    ...
+    if (builder.Environment.IsDevelopment() || builder.Environment.IsStaging())
+    {
+        builder.Services.AddHttpLogging(o => { 
+            o.LoggingFields = HttpLoggingFields.All; 
+            o.RequestHeaders.Add("Referer");
+            o.RequestHeaders.Add("sec-ch-ua-platform");
+            o.RequestHeaders.Add("sec-ch-ua");
+            o.RequestHeaders.Add("sec-ch-ua-mobile");
+            o.RequestHeaders.Add("sec-fetch-site");
+            o.RequestHeaders.Add("sec-fetch-mode");
+            o.RequestHeaders.Add("sec-fetch-dest");
+            o.RequestHeaders.Add("priority");
+            o.RequestHeaders.Add("X-Forwarded-For");                 <-- Here
+            o.RequestHeaders.Add("X-Forwarded-Proto");               <-- Here
+            o.RequestHeaders.Add("X-Original-For");                  <-- Here
+            o.RequestHeaders.Add("X-Original-Proto");                <-- Here
+        }); 
+    }
+    ...
+    var app = builder.Build();
+    ...
+    if (app.Environment.IsDevelopment() || app.Environment.IsStaging())
+    {
+        app.UseHttpLogging();
+        app.MapOpenApi();
+    }
+    ...
+```
+
+After this I've created 2 extension methods for the forward hearders, which is in a static class [ForwardHeadersExtensions.cs](../HospitalProject.Server/Extensions/ForwardHeadersExtensions.cs). `AddForwardHeaderOptionsConfiguration()` takes in 2 arguments, which is the of type `IConfiguration` for reading out the configuration from the **appsettings.json** file and `IWebHostEnvironment` for getting which the value from the environment value.
+```csharp
+    ...
+    builder.Services.AddForwardHeaderOptionsConfiguration(builder.Configuration, builder.Environment);
+    ...
+    var app = builder.Build();
+    app.UseForwardedHeaders();
+    app.UseSerilogRequestLogging();
+    app.LogForwardHeaderOptionsConfiguration();
+    ...
+```
+
+The main function `AddForwardHeaderOptionsConfiguration()` is checking if the enviornment variable `ASPNETCORE_ENVIRONMENT` is developement just said the Forward Headers to `XForwardedFor` & `XForwardedProto` are set but it doesn't stop you from setting values in [appsettings.Development.json](../HospitalProject.Server/appsettings.Development.json) (Don't need to do this but hey, it's good to know 😀). Otherwise if the environment is something else then I'm going to ask you for the Forward Headers and `KnownProxies` is optional.
+```csharp
+namespace HospitalProject.Server.Extensions;
+
+using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Options;
+using Serilog;
+
+public static class ForwardedHeadersExtensions
+{
+    public static IServiceCollection AddForwardHeaderOptionsConfiguration(this IServiceCollection services, IConfiguration configuration, IWebHostEnvironment hostEnvironment)
+    {
+        services.Configure<ForwardedHeadersOptions>(opts =>
+        {
+            var forwardHeadersSection = configuration.GetSection("ForwardedHeaders");
+
+            if (string.IsNullOrEmpty(forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()) && hostEnvironment.IsDevelopment())
+            {
+                opts.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+            }
+            else if (!string.IsNullOrEmpty(forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()))
+            {
+                var forwardHeaderOptionsStr = forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()?.Trim();
+
+                if (!string.IsNullOrEmpty(forwardHeaderOptionsStr))
+                {
+                    ForwardedHeaders forwardedHeaders = ForwardedHeaders.None;
+
+                    if (forwardHeaderOptionsStr.Contains(','))
+                    {
+                        var forwardHeaderOptions = forwardHeaderOptionsStr.Split(",", StringSplitOptions.TrimEntries);
+
+                        foreach (var option in forwardHeaderOptions)
+                        {
+                            forwardedHeaders |= Enum.Parse<ForwardedHeaders>(option);
+                        }
+                    }
+                    else
+                    {
+                        forwardedHeaders = Enum.Parse<ForwardedHeaders>(forwardHeaderOptionsStr);
+                    }
+
+                    opts.ForwardedHeaders = forwardedHeaders;
+                }
+                else
+                {
+                    throw new Exception("Forward Header Options are missing.");
+                }
+
+                var knownProxiesSection = forwardHeadersSection.GetSection("KnownProxies").Get<string[]>();
+                if (knownProxiesSection != null)
+                {
+                    opts.KnownProxies.Clear();
+                    foreach(var proxy in knownProxiesSection)
+                    {
+                        opts.KnownProxies.Add(IPAddress.Parse(proxy));
+                    }
+                }
+            }
+            else
+            {
+                throw new Exception("Forward Header Section is missing.");
+            }
+        });
+
+        return services;
+    }
+
+    public static void LogForwardHeaderOptionsConfiguration(this IApplicationBuilder app)
+    {
+        var fwdOptions = app.ApplicationServices.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value;
+        Log.Information($"ForwardedHeaders config — Headers: {fwdOptions.ForwardedHeaders}, KnownProxies: {string.Join(", ", fwdOptions.KnownProxies)}");
+    }
+} 
+```
+
+As mentioned eariler, the `ForwardedHeaderOptions` string value is split up, trimmed and then iterating it and doing a Bitwise OR assignment comparison operation and then assigning the value to `ForwardedHeaders` or just use the whole string if it's not comma separated. 
+
+And for known proxies, Firstly, I'm clearing out all the known proxy values and then using the `System.Net.IPAddress.Parse()` to parse out the IP address from the array and then storing them. 
+
+The `LogForwardHeaderOptionsConfiguration()` function just logs the Forward Headers and known proxies that are set (for debugging purposes of course!). Lastly, in the app middleware pipeline, it just now `app.UseForwardHeaders()` from what it was initially before.  
+
+## SSL Configuration
+I'm going to now configure and parameterise SSL configuration both backend and fronend. On both client and server certificates, I've set the key usage to `digitalSignature`, meaning it's restricted to use ECDHE/DHE Cipher suites. This means I can use TLS version 1.2 and version 1.3. TLS version 1.3 is performant than version 1.2. But you still version 1.2 for legacy reasons. 
+
+
+
+
+* [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
+* [Dockerfile reference | Docker Docs](https://docs.docker.com/reference/dockerfile/)
+* [Best practices | Docker Docs](https://docs.docker.com/build/building/best-practices/)
+* [Part 1: Containerize an application | Docker Docs](https://docs.docker.com/get-started/workshop/02_our_app/)
+* [Hosting ASP.NET Core image in container using docker compose with HTTPS | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/security/docker-compose-https?view=aspnetcore-10.0)
+* [How to Dockerize a React App: A Step-by-Step Guide for Developers | Docker](https://www.docker.com/blog/how-to-dockerize-react-app/)
+* [nginx - Official Image | Docker Hub](https://hub.docker.com/_/nginx)
+* [node - Official Image | Docker Hub](https://hub.docker.com/_/node)
+* [How To Deploy a React Application with Nginx on Ubuntu | DigitalOcean](https://www.digitalocean.com/community/tutorials/deploy-react-application-with-nginx-on-ubuntu)
+* [Optimize cache usage in builds | Docker Docs](https://docs.docker.com/build/cache/optimize/)
+* [openssl-genrsa - OpenSSL Documentation](https://docs.openssl.org/master/man1/openssl-genrsa/)
+* [x509v3_config - OpenSSL Documentation](https://docs.openssl.org/master/man5/x509v3_config/)
+* [How to install CA certificates and PKCS12 key bundles on different platforms · GitHub](https://gist.github.com/alanbacelar/c2642c51e9a96e0cff90ef52244ef4b7#file-chromium-linux-md)
+* [Configuring ASP.NET Core Forwarded Headers Middleware](https://nestenius.se/net/configuring-asp-net-core-forwarded-headers-middleware/)
+* [TLS 1.2 vs TLS 1.3: Key Differences | A10 Networks](https://www.a10networks.com/glossary/key-differences-between-tls-1-2-and-tls-1-3/)
+* [tls - The difference between Subject Key Identifier and sha1Fingerprint in X509 Certificates - Information Security Stack Exchange](https://security.stackexchange.com/questions/200295/the-difference-between-subject-key-identifier-and-sha1fingerprint-in-x509-certif)
+* [What extensions and details are included in a SSL certificate?](https://knowledge.digicert.com/solution/what-extensions-and-details-are-included-in-a-ssl-certificate)

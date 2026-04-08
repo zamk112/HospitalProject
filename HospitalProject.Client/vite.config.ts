@@ -6,33 +6,36 @@ import os from "node:os";
 import { env } from "node:process";
 import https from "https";
 
-const certName = 'hospitalproject.SSC';
-const certFolder = path.join(os.homedir(), 'Workspaces', 'Certs', 'dotnet');
-const certPath = path.join(certFolder, `${certName}.pem`);
-const keyPath = path.join(certFolder, `${certName}.key`);
-
 const target = env.ASPNETCORE_HTTPS_PORT ? `https://localhost:${env.ASPNETCORE_HTTPS_PORT}` : 'https://localhost:7083';
 
+export default defineConfig(({ command }) => {
+  const certName = 'hospitalproject.client';
+  const certFolder = path.join(os.homedir(), 'Workspaces', 'Certs', 'dotnet');
+  const certPath = path.join(certFolder, `${certName}.pem`);
+  const keyPath = path.join(certFolder, `${certName}.key`);  
 
-if (!existsSync(certPath) || !existsSync(keyPath)) {
-  throw new Error('Certificate not found.');
-}
+  if (command === 'serve' && (!existsSync(certPath) || !existsSync(keyPath))) {
+    throw new Error('Certificate not found.');
+  }
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    https: {
-      key: readFileSync(keyPath),
-      cert: readFileSync(certPath)
-    },
+  return {
+    plugins: [react()],
+    server: command === 'serve' ? {
+      port: 5173,
+      https: {
+        key: readFileSync(keyPath),
+        cert: readFileSync(certPath)
+      },
     proxy: {
       '^/weatherforecast': {
         target: target,
         secure: true,
         agent: new https.Agent({
           ca: readFileSync(certPath)
-        })
+        }),
+        xfwd: true
       }
     }
-  },
-})
+    } : undefined,
+  }
+});

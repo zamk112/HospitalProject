@@ -1,0 +1,5 @@
+node_modules
+README.md
+staging.nginx.conf
+Dockerfile
+.dockerignore

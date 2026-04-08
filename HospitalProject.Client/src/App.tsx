@@ -1,11 +1,35 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useEffect, useRef, useState } from 'react';
+import reactLogo from './assets/react.svg';
+import viteLogo from './assets/vite.svg';
+import heroImg from './assets/hero.png';
+import './App.css';
+
+interface Forecast {
+  date: string;
+  temperatureC: number;
+  temperatureF: number;
+  summary: string;
+};
 
 function App() {
   const [count, setCount] = useState(0)
+  const [forecasts, setForecasts] = useState<Forecast[]>();
+  const hasFetchedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+
+    const populateWeatherForecasts = async () => {
+      const response = await fetch('weatherforecast');
+      if (response.ok) {
+        const data = await response.json();
+         setForecasts(data);
+      }
+    };
+    
+    populateWeatherForecasts();
+  }, []);
 
   return (
     <>
@@ -20,6 +44,30 @@ function App() {
           <p>
             Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
           </p>
+          <div className="weather-forecasts">
+            {!forecasts ? <p>Weather Forecast Loading...</p> : 
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Temp. (C)</th>
+                    <th>Temp. (F)</th>
+                    <th>Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {forecasts.map((forecast, index) => (
+                    <tr key={index}>
+                      <td>{new Date(forecast.date).toLocaleDateString()}</td>
+                      <td>{forecast.temperatureC}</td>
+                      <td>{forecast.temperatureF}</td>
+                      <td>{forecast.summary}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            }
+          </div>
         </div>
         <button
           className="counter"
@@ -118,4 +166,4 @@ function App() {
   )
 }
 
-export default App
+export default App;

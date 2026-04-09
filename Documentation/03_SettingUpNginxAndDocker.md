@@ -1180,7 +1180,7 @@ depth=0: CN=hospitalproject.api.local (untrusted)
 depth=1: CN=HospitalProjectCA
 ```
 
-When the above command was ran at depth 0 says `CN=hospitalproject.api.local (untrusted)`, this is A CA certificate not in a trusted CA store (which I don't have). But the output against the server pem file is OK. In saying that NGINX doesn't care about this only cares if the certificate is valid. But usually on a normal certificate there would be an intermediary certificate which then the CA certificate will have a depth level of 2, so I left it at 2 for now. 
+When the above command was ran at depth 0 says `CN=hospitalproject.api.local (untrusted)`, this is A CA certificate and not in a trusted CA store (which I don't have). But the output against the server pem file is OK. In saying that NGINX doesn't care about this only cares if the certificate is valid. But usually on a normal certificate there would be an intermediary certificate which then the CA certificate will have a depth level of 2, so I left it at 2 which acts like a safety net for now. 
 
 The same for `proxy_ssl_name` and `proxy_ssl_server_name`, this is optional because I passed in the URI with a hostname or network alias when I created the docker container not an IP address it would mandatory.
 

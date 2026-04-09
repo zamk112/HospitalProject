@@ -775,7 +775,7 @@ authorityKeyIdentifier = keyid:always, issuer
 
 The CA name is *HospitalProjectCA* and I'm restricting the CA to generate other certificate based on the subnet that I setup for Docker earlier and also permitting localhost and the DNS names that I will set when launching the containers (since I need to connect the React app from the browser). 
 
-In the `req` section, the `distinguished_name` is set from the `req_distinguished_name` section which is the Common Name (`CN`), the `x509_extensions` values comes froms the `v3_ca` and `promp = no` means no interactive prompting.
+In the `req` section, the `distinguished_name` is set from the `req_distinguished_name` section which is the Common Name (`CN`), the `x509_extensions` values comes from the `v3_ca` and `prompt = no` means no interactive prompting.
 
 In the `v3_ca` section: 
 * `basicConstraints` set to `CA:true` means that the certificate is marked for Certificate Authority.
@@ -786,19 +786,22 @@ In the `v3_ca` section:
 
 Another thing to note is `basicConstraints`, `keyUsage` and `nameConstraints` has the `critical` flag, what this means that it cannot be ignored by the validator, if the certificate is not a CA.
 
+I'm generating the CA key with -aes256 encryption and it will prompt you to enter a pass phrase.
+
 ```
-> openssl genrsa -out ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key 2048
+> openssl genrsa -aes256 -out ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key 2048
+> Enter PEM pass phrase:
+> Verifying - Enter PEM pass phrase:
 ```
 
-For production, I would have password encrypted the key with either -aes256 or -des3 flag, but since this is staging and I'm doing this on my machine only, I decided not to (and it becomes a hassal later). 
-
-Once the key file is generated, next I need to generate the certificate using the [HospitalProject.ca.conf](../HospitalProject.ca.conf) file.
+Once the key file is generated, next I need to generate the certificate using the [HospitalProject.ca.conf](../HospitalProject.ca.conf) file. And again you will have to enter a pass phrase.
 ```
 > openssl req -x509 -new -nodes \
   -key ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key \
   -sha256 -days 365 \
   -config ~/Projects/HospitalProject/HospitalProject.ca.conf \
   -out ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
+> Enter pass phrase for /Users/zamk/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key:
 ```
 
 So now, both the certificate files are generated.
@@ -834,12 +837,13 @@ And just to verify, everything from the config file was applied.
 ### Adding CA Certificate macOS trust store
 To add the CA certificate to the macOS trust store, run the following command.  
 ```
-sudo security add-trusted-cert -d -r trustRoot \
+> sudo security add-trusted-cert -d -r trustRoot \
   -k /Library/Keychains/System.keychain \
   ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
+Password:
 ```
 
-And I can see the certificate in the trust store now.
+You will have to enter your password and once again when the message dialog pops up. And I can see the certificate in the trust store now.
 ![](./images/Screenshot%202026-04-05%20at%2012.40.30 am.png)
 
 ### Adding CA Certificate NSSDB (Ubuntu)
@@ -914,7 +918,6 @@ Just going onto the other attributes and values `subjectKeyIdentifier = hash` wi
 
 `subjectAltName` is referencing the `alt_names` section with the `@alt_names` attribute.
 
-
 Now I'm going to generate the command for generating the CSR and private key for the ASP.NET Core backend, with the config file [hospitalproject.server.cert.conf](../HospitalProject.Server/hospitalproject.server.cert.conf).
 ```
 > openssl req -new \
@@ -928,7 +931,7 @@ Now I'm going to generate the command for generating the CSR and private key for
 -----
 ```
 
-Lastly, I'm going to self sign the certificate and generate the PEM (Privacy-Enhanced Mail) certificate for ASP.NET Core backend. But I'm going to pass in the `v3_sign` section because then I can reference the CA.   
+Lastly, I'm going to self sign the certificate and generate the PEM certificate for ASP.NET Core backend. But I'm going to pass in the `v3_sign` section because then I can reference the CA.  
 ```
 > openssl x509 -req \
   -in ~/Workspaces/Certs/hospital.project/hospital.project.server.csr \
@@ -942,20 +945,39 @@ Lastly, I'm going to self sign the certificate and generate the PEM (Privacy-Enh
   -out ~/Workspaces/Certs/hospital.project/hospital.project.server.pem
 Certificate request self-signature ok
 subject=CN=hospitalproject.api.local
+> Enter pass phrase for /Users/zamk/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key:
 ```
 
-All done, all the certificate. for the server is now generated.  
+The PEM file is not the certificate that I am going to use, I'm going to export a pfx file using the pem and key file that I generated for the server.  
+```
+> openssl pkcs12 -export \
+  -out ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx \
+  -inkey ~/Workspaces/Certs/hospital.project/hospital.project.server.key \
+  -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pem \
+  -certfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
+> Enter Export Password:
+> Verifying - Enter Export Password:
+```
+
+And again, I had to enter the pass phrase twice but after this; all done, all the certificate. For the server is now generated.  
 ```
 > ls ~/Workspaces/Certs/hospital.project 
-ca     hospital.project.server.csr     hospital.project.server.key     hospital.project.server.pem
+ca                              hospital.project.server.key     hospital.project.server.pfx
+hospital.project.server.csr     hospital.project.server.pem
 ```
 
-And I'm going to verify everything is all good with the CA and my server certificate.  
+And I'm going to verify everything is all good with the CA and my server certificate. Be sure to enter your pass phrase for `-passin` flag.  
 ```
 > openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem \
   ~/Workspaces/Certs/hospital.project/hospital.project.server.pem
 /Users/zamk/Workspaces/Certs/hospital.project/hospital.project.server.pem: OK
+> openssl pkcs12 -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx \
+  -clcerts -nokeys -passin pass:*********** | \
+  openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
+stdin: OK
 ```
+
+The second command that I ran extracts the client certificate. The `-clcerts` & `-nokeys` flags isolates the end-entity certificate from the PFX file. And then pipe the output to `openssl verify` and check against the CA.
 
 And the SANs and all the other attributes that I specified in the `v3_req` & from the `v3_sign` section the CA along with `authorityKeyIdentifier` information is also are on the certificate.  
 ```
@@ -963,30 +985,61 @@ And the SANs and all the other attributes that I specified in the `v3_req` & fro
         Serial Number:
             ...
         Signature Algorithm: sha256WithRSAEncryption
-        Issuer: CN = HospitalProjectCA
+        Issuer: CN=HospitalProjectCA
         Validity
-            Not Before: Apr  8 06:10:38 2026 GMT
-            Not After : Apr  8 06:10:38 2027 GMT
+            Not Before: Apr  9 03:53:10 2026 GMT
+            Not After : Apr  9 03:53:10 2027 GMT
 --
         X509v3 extensions:
-            X509v3 Subject Alternative Name:
+            X509v3 Subject Alternative Name: 
                 DNS:hospitalproject.api.local
-            X509v3 Basic Constraints:
+            X509v3 Basic Constraints: 
                 CA:FALSE
-            X509v3 Key Usage:
+            X509v3 Key Usage: 
                 Digital Signature
-            X509v3 Extended Key Usage:
+            X509v3 Extended Key Usage: 
                 TLS Web Server Authentication
-            X509v3 Subject Key Identifier:
+            X509v3 Subject Key Identifier: 
                 ...
-            X509v3 Authority Key Identifier:
+            X509v3 Authority Key Identifier: 
+                ...
+    Signature Algorithm: sha256WithRSAEncryption
+    Signature Value:
+```
+
+The output is the same when inspecting the pfx file.  
+```
+% openssl pkcs12 -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx \
+  -passin pass:******** -clcerts -nokeys | \
+  openssl x509 -noout -text | \
+  grep -E -A 3 '(X509v3|Serial Number|Issuer)'
+        Serial Number:
+            ...
+        Signature Algorithm: sha256WithRSAEncryption
+        Issuer: CN=HospitalProjectCA
+        Validity
+            Not Before: Apr  9 03:53:10 2026 GMT
+            Not After : Apr  9 03:53:10 2027 GMT
+--
+        X509v3 extensions:
+            X509v3 Subject Alternative Name: 
+                DNS:hospitalproject.api.local
+            X509v3 Basic Constraints: 
+                CA:FALSE
+            X509v3 Key Usage: 
+                Digital Signature
+            X509v3 Extended Key Usage: 
+                TLS Web Server Authentication
+            X509v3 Subject Key Identifier: 
+                ....
+            X509v3 Authority Key Identifier: 
                 ...
     Signature Algorithm: sha256WithRSAEncryption
     Signature Value:
 ```
 
 ### ReactJS and NGINX Frontend SSL Certificate
-Now for the front end the [hospitalproject.client.cert.conf](../HospitalProject.Client/hospitalproject.client.cert.conf) will be used to generate the certificates. The configuration for this certificate is almost identifical to [hospitalproject.server.cert.conf](../HospitalProject.Server/hospitalproject.server.cert.conf) except, I've added the localhost name and ip adddress in the `alt_names` section.
+Now for the front end the [hospitalproject.client.cert.conf](../HospitalProject.Client/hospitalproject.client.cert.conf) will be used to generate the certificates. The configuration for this certificate is almost identical to [hospitalproject.server.cert.conf](../HospitalProject.Server/hospitalproject.server.cert.conf) except, I've added the localhost name and ip address in the `alt_names` section.
 
 And I'm going to use the same commands that I used for generating the certificates for the ASP.NET Core backend.  
 ```
@@ -1035,7 +1088,7 @@ Firstly going to generate the CSR and private key.
 .........+...+.............+.....+.+.....+...+...+...+....+..+...+++++++++++++++++++++++++++++++++++++++*.........+...+++++++++++++++++++++++++++++++++++++++*..............+.....+......+...+.........+.......+......+........+......+.+..+.+......+...+......+..+...+....+.....+...+..
 ```
 
-Next, I'm going to self sign the certificate and generate the certificate and passing in the `v3_sign` section from my configuration file.
+Next, I'm going to self sign the certificate and generate the certificate and passing in the `v3_sign` section from my configuration file. Be sure to enter your pass phrase when prompted.
 ```
 > openssl x509 -req \
   -in ~/Workspaces/Certs/hospital.project/hospital.project.client.csr \
@@ -1049,11 +1102,14 @@ Next, I'm going to self sign the certificate and generate the certificate and pa
   -out ~/Workspaces/Certs/hospital.project/hospital.project.client.pem
 Certificate request self-signature ok
 subject=CN=hospitalproject.local
+Enter pass phrase for /Users/zamk/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.key:
 ```
+
 Now, both client and server certificates are now generated.  
 ```
 > ls ~/Workspaces/Certs/hospital.project 
-ca  hospital.project.client.csr     hospital.project.client.key     hospital.project.client.pem     hospital.project.server.csr     hospital.project.server.key     hospital.project.server.pem
+ca                              hospital.project.client.key     hospital.project.server.csr     hospital.project.server.pem
+hospital.project.client.csr     hospital.project.client.pem     hospital.project.server.key     hospital.project.server.pfx
 ```
 
 Now, I'm going to validate the certificate with my CA certificate.
@@ -1071,8 +1127,8 @@ The SANs and all the other attributes that I specified in the `v3_req` & from th
         Signature Algorithm: sha256WithRSAEncryption
         Issuer: CN = HospitalProjectCA
         Validity
-            Not Before: Apr  8 06:31:33 2026 GMT
-            Not After : Apr  8 06:31:33 2027 GMT
+            Not Before: Apr  9 04:20:49 2026 GMT
+            Not After : Apr  9 04:20:49 2027 GMT
 --
         X509v3 extensions:
             X509v3 Subject Alternative Name:
@@ -1105,22 +1161,39 @@ Before I create the YAML file for deployment, firstly I updated the [staging.ngi
             proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
 
             proxy_ssl_verify              on;
+            proxy_ssl_verify_depth        2;
+            proxy_ssl_name                hospitalproject.api.local;
+            proxy_ssl_server_name         on;
             proxy_ssl_trusted_certificate /etc/nginx/certs/HospitalProject.CA.pem;
         }
 ...
 ```
 
+With `proxy_ssl_verify` set to on although not strictly necessary to have `proxy_ssl_verify_depth` to 2 in my case the certificate chain for the certificates that I have generated is only at level 1. 
+```
+> openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem \
+  -show_chain \
+  ~/Workspaces/Certs/hospital.project/hospital.project.server.pem
+/Users/zamk/Workspaces/Certs/hospital.project/hospital.project.server.pem: OK
+Chain:
+depth=0: CN=hospitalproject.api.local (untrusted)
+depth=1: CN=HospitalProjectCA
+```
+
+When the above command was ran at depth 0 says `CN=hospitalproject.api.local (untrusted)`, this is A CA certificate not in a trusted CA store (which I don't have). But the output against the server pem file is OK. In saying that NGINX doesn't care about this only cares if the certificate is valid. But usually on a normal certificate there would be an intermediary certificate which then the CA certificate will have a depth level of 2, so I left it at 2 for now. 
+
+The same for `proxy_ssl_name` and `proxy_ssl_server_name`, this is optional because I passed in the URI with a hostname or network alias when I created the docker container not an IP address it would mandatory.
+
 Everything else remains the same. Next I created both the back and front containers with the following commands. Both contains has a network alias name, assigned to my network bridge adapter and I didn't give containers a name if I did then I'd have to delete the container and then redeploy it, IP addresses manually assign to map the subnet of my network bridge adapter and repointed the certificates to the location of where I generated the certificates with OpenSSL.
 ```
 > docker run -d --network hospital-network --ip 10.0.0.3 --network-alias hospitalproject.api.local \
 -e ASPNETCORE_URLS="https://+:5229" \
--e ASPNETCORE_Kestrel__Certificates__Default__Path=/https/hospital.project.server.pem \
--e ASPNETCORE_Kestrel__Certificates__Default__KeyPath=/https/hospital.project.server.key \
+-e ASPNETCORE_Kestrel__Certificates__Default__Path=/https/hospitalproject.server.pfx \
+-e ASPNETCORE_Kestrel__Certificates__Default__Password="**********" \
 -e ASPNETCORE_ENVIRONMENT=Staging \
 -e ASPNETCORE_ForwardedHeaders_Enabled=true \
 -e ASPNETCORE_KnownProxies__0=10.0.0.2 \
--v ~/Workspaces/Certs/hospital.project/hospital.project.server.pem:/https/hospital.project.server.pem:ro \
--v ~/Workspaces/Certs/hospital.project/hospital.project.server.key:/https/hospital.project.server.key:ro \
+-v ~/Workspaces/Certs/dotnet/hospitalproject.server.pfx:/https/hospitalproject.server.pfx:ro \
 -v ~/Projects/HospitalProject/HospitalProject.Server/appsettings.Staging.json:/app/appsettings.Staging.json:ro \
 hospital.project.server
 a0bb6b87a96481d0aab1f487db47111a905e7af9199ccfad4508515c8981fe89
@@ -1223,7 +1296,7 @@ c3ebc0bc64dd   hospital.project.server   "dotnet HospitalProj…"   19 minutes a
 
 For the backend, I'm using the pem and key file certificates that I created and for the frontend I changed the certificate to point to the CA certificate that I have generated and also added two more environment variables which are `ASPNETCORE_ForwardedHeaders_Enabled=true` & `ASPNETCORE_KnownProxies__0=10.0.0.2` so that ASP.NET Core knows it's a trusted proxy and it will process the X-Forward headers like it does when running the ASP.NET core backend and frontend locally with the ViteJS proxy. 
 
-The key difference being I did not have add these environment variables in because ASP.NET Core automatically processes the X-Forward headers when everything is running on docker. Since both containers are running. The requests are coming from browser to NGINX (And I think it's overwritting my XForward Headers configuration in my code but will sort that out later).
+The key difference being I did not have add these environment variables in because ASP.NET Core automatically processes the X-Forward headers when everything is running on docker. Since both containers are running. The requests are coming from browser to NGINX (And I think it's overwriting my XForward Headers configuration in my code but will sort that out later).
 ```
 2026-04-05 14:55:57.768 | 10.0.0.1 - - [05/Apr/2026:04:55:57 +0000] "GET /weatherforecast HTTP/2.0" 200 382 "https://localhost/" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 ```
@@ -1301,7 +1374,7 @@ The easiest way would be just to add an entry to your **/etc/hosts** file (On Ub
 EOF
 ```
 
-Because I've exposed port 443 on Docker, a NAT transation is automatically done to docker. And now the page is loading.
+Because I've exposed port 443 on Docker, a NAT transition is automatically done to docker. And now the page is loading.
 ![hospitalproject.local is working now](./images/Screenshot%20from%202026-04-05%2016-01-21.png)
 
 But now I need to do some clean up before I create YAML files for full build and deployment. 
@@ -1318,7 +1391,7 @@ I just thought to log out the environment name because I have some ah-duh moment
 ```
 
 ## Forward Headers and Known Proxies
-When I created the ASP.NET Core container, I set alot of environment variables especially these two stood out to me being a little bit problematic:  
+When I created the ASP.NET Core container, I set a lot of environment variables especially these two stood out to me being a little bit problematic:  
 ```
 ...
 -e ASPNETCORE_ForwardedHeaders_Enabled=true \
@@ -1331,7 +1404,7 @@ From the Reading that I have done, it seems that these parameters ignores the Fo
 As mentioned in the previous section, instead of passing environment variables for enabling forward headers and adding known proxies, I'm going to pass it through from **appsettings.json**. Before I pass it through, I need to add some code in [Program.cs](../HospitalProject.Server/Program.cs).
 
 
-If it's development then use the what I orignally set otherwise for everything else get it from the config file. And Within the [appsettings.Staging.json](../HospitalProject.Server/appsettings.Staging.json), this is the config that I've set for Forward Headers.
+If it's development then use the what I originally set otherwise for everything else get it from the config file. And Within the [appsettings.Staging.json](../HospitalProject.Server/appsettings.Staging.json), this is the config that I've set for Forward Headers.
 ```json
 ...
   "ForwardedHeaders": {
@@ -1341,7 +1414,7 @@ If it's development then use the what I orignally set otherwise for everything e
 ...
 ```
 
-`ForwardedHeaderOptions` is just a comma separate string, which my code will split and trim the values and then "use" which I will discuss in a little bit and then `KnownProxies` is just an array of IP address but this is optional. I've actually created an extension class and methods for parsing in the values from **appsetting.json** file. Before I discuss the extension class, I want to discuss [Program.cs](../HospitalProject.Server/Program.cs).
+`ForwardedHeaderOptions` is just a comma separate string, which my code will split and trim the values and then "use" which I will discuss in a little bit and then `KnownProxies` is just an array of IP address but this is optional. I've actually created an extension class and methods for parsing in the values from **appsettings.json** file. Before I discuss the extension class, I want to discuss [Program.cs](../HospitalProject.Server/Program.cs).
 ```csharp
 using HospitalProject.Server.Extensions;
 using Microsoft.AspNetCore.HttpLogging;
@@ -1425,7 +1498,7 @@ First of all, I added Forward Headers for HTTP logging so that the `X-Original-P
     ...
 ```
 
-After this I've created 2 extension methods for the forward hearders, which is in a static class [ForwardHeadersExtensions.cs](../HospitalProject.Server/Extensions/ForwardHeadersExtensions.cs). `AddForwardHeaderOptionsConfiguration()` takes in 2 arguments, which is the of type `IConfiguration` for reading out the configuration from the **appsettings.json** file and `IWebHostEnvironment` for getting which the value from the environment value.
+After this I've created 2 extension methods for the forward headers, which is in a static class [ForwardHeadersExtensions.cs](../HospitalProject.Server/Extensions/ForwardHeadersExtensions.cs). `AddForwardHeaderOptionsConfiguration()` takes in 2 arguments, which is the of type `IConfiguration` for reading out the configuration from the **appsettings.json** file and `IWebHostEnvironment` for getting which the value from the environment value.
 ```csharp
     ...
     builder.Services.AddForwardHeaderOptionsConfiguration(builder.Configuration, builder.Environment);
@@ -1437,7 +1510,7 @@ After this I've created 2 extension methods for the forward hearders, which is i
     ...
 ```
 
-The main function `AddForwardHeaderOptionsConfiguration()` is checking if the enviornment variable `ASPNETCORE_ENVIRONMENT` is developement just said the Forward Headers to `XForwardedFor` & `XForwardedProto` are set but it doesn't stop you from setting values in [appsettings.Development.json](../HospitalProject.Server/appsettings.Development.json) (Don't need to do this but hey, it's good to know 😀). Otherwise if the environment is something else then I'm going to ask you for the Forward Headers and `KnownProxies` is optional.
+The main function `AddForwardHeaderOptionsConfiguration()` is checking if the environment variable `ASPNETCORE_ENVIRONMENT` is development just said the Forward Headers to `XForwardedFor` & `XForwardedProto` are set but it doesn't stop you from setting values in [appsettings.Development.json](../HospitalProject.Server/appsettings.Development.json) (Don't need to do this but hey, it's good to know 😀). Otherwise if the environment is something else then I'm going to ask you for the Forward Headers and `KnownProxies` is optional.
 ```csharp
 namespace HospitalProject.Server.Extensions;
 
@@ -1514,17 +1587,14 @@ public static class ForwardedHeadersExtensions
 } 
 ```
 
-As mentioned eariler, the `ForwardedHeaderOptions` string value is split up, trimmed and then iterating it and doing a Bitwise OR assignment comparison operation and then assigning the value to `ForwardedHeaders` or just use the whole string if it's not comma separated. 
+As mentioned earlier, the `ForwardedHeaderOptions` string value is split up, trimmed and then iterating it and doing a Bitwise OR assignment comparison operation and then assigning the value to `ForwardedHeaders` or just use the whole string if it's not comma separated. 
 
 And for known proxies, Firstly, I'm clearing out all the known proxy values and then using the `System.Net.IPAddress.Parse()` to parse out the IP address from the array and then storing them. 
 
 The `LogForwardHeaderOptionsConfiguration()` function just logs the Forward Headers and known proxies that are set (for debugging purposes of course!). Lastly, in the app middleware pipeline, it just now `app.UseForwardHeaders()` from what it was initially before.  
 
 ## SSL Configuration
-I'm going to now configure and parameterise SSL configuration both backend and fronend. On both client and server certificates, I've set the key usage to `digitalSignature`, meaning it's restricted to use ECDHE/DHE Cipher suites. This means I can use TLS version 1.2 and version 1.3. TLS version 1.3 is performant than version 1.2. But you still version 1.2 for legacy reasons. 
-
-
-
+I'm going to now configure and parameterize SSL configuration both backend and frontend. On both client and server certificates, I've set the key usage to `digitalSignature`, meaning it's restricted to use ECDHE/DHE Cipher suites. This means I can use TLS version 1.2 and version 1.3. TLS version 1.3 is performant than version 1.2. But you still version 1.2 for legacy reasons. 
 
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
 * [Dockerfile reference | Docker Docs](https://docs.docker.com/reference/dockerfile/)
@@ -1543,3 +1613,4 @@ I'm going to now configure and parameterise SSL configuration both backend and f
 * [TLS 1.2 vs TLS 1.3: Key Differences | A10 Networks](https://www.a10networks.com/glossary/key-differences-between-tls-1-2-and-tls-1-3/)
 * [tls - The difference between Subject Key Identifier and sha1Fingerprint in X509 Certificates - Information Security Stack Exchange](https://security.stackexchange.com/questions/200295/the-difference-between-subject-key-identifier-and-sha1fingerprint-in-x509-certif)
 * [What extensions and details are included in a SSL certificate?](https://knowledge.digicert.com/solution/what-extensions-and-details-are-included-in-a-ssl-certificate)
+* [pkcs12 - OpenSSL Documentation](https://docs.openssl.org/1.1.1/man1/pkcs12/)

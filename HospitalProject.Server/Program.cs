@@ -11,6 +11,12 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
+
+    if (!builder.Environment.IsDevelopment())
+    {
+        builder.WebHost.ConfigureKestrelHttpsDefaults(builder.Environment);
+    }
+
     builder.Services.AddSerilog((services, lc) => lc
         .ReadFrom.Configuration(builder.Configuration)
         .ReadFrom.Services(services)
@@ -37,7 +43,7 @@ try
     }
 
     builder.Services.AddForwardHeaderOptionsConfiguration(builder.Configuration, builder.Environment);
-
+    
     builder.Services.AddControllers();
     
     builder.Services.AddOpenApi();

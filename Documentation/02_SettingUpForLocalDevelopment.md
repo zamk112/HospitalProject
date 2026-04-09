@@ -251,7 +251,7 @@ A little sparse on information from before, but I'll fix that up later. But righ
 ```
 
 ### Adding HTTP Logging Middleware
-Since I'm trying to implement a reverse proxy setup with my web application stack. For debugging purposes I also added the `AddHttpLogging()` and `UseHttpLogging()` to capture my request for debugging later. At the moment it is setup for development mode.  
+Since I'm trying to implement a reverse proxy setup with my web application stack. For debugging purposes I also added the `AddHttpLogging()` and `UseHttpLogging()` to capture my request for debugging later. At the moment it is setup for development mode and also the same for `OpenApi()` part of development only.  
 ```csharp
     var builder = WebApplication.CreateBuilder(args);
 
@@ -274,6 +274,8 @@ Since I'm trying to implement a reverse proxy setup with my web application stac
                 o.RequestHeaders.Add("sec-fetch-dest");
                 o.RequestHeaders.Add("priority");
             }); // In development mode only
+
+            builder.Services.AddOpenApi();
         }
         ...
         var app = builder.Build();

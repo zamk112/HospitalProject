@@ -29,12 +29,12 @@ try
             o.RequestHeaders.Add("sec-fetch-dest");
             o.RequestHeaders.Add("priority");
         });
+
+        builder.Services.AddOpenApi();
     }
 
     builder.Services.AddControllers();
     
-    builder.Services.AddOpenApi();
-
     var app = builder.Build();
 
     app.UseSerilogRequestLogging();

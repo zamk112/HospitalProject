@@ -40,14 +40,14 @@ try
             o.RequestHeaders.Add("X-Original-For");
             o.RequestHeaders.Add("X-Original-Proto");
         });
+
+        builder.Services.AddOpenApi();
     }
 
     builder.Services.AddForwardHeaderOptionsConfiguration(builder.Configuration, builder.Environment);
     
     builder.Services.AddControllers();
     
-    builder.Services.AddOpenApi();
-
     var app = builder.Build();
     
     app.UseForwardedHeaders();

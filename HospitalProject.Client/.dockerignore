@@ -1,5 +1,6 @@
 node_modules
 README.md
-staging.nginx.conf
+nginx.conf
+*.nginx.conf
 Dockerfile
 .dockerignore

@@ -337,7 +337,8 @@ This [Dockerfile](../HospitalProject.Client/Dockerfile), I hand crafted and also
 ```
 node_modules
 README.md
-staging.nginx.conf
+nginx.conf
+*.nginx.conf
 Dockerfile
 .dockerignore
 ```
@@ -852,7 +853,7 @@ On Ubuntu, I use Chromium based browsers like Google Chrome or Brave and both of
 > certutil -A \
   -d ~/.pki/nssdb \
   -n "HospitalProjectCA" \
-  -t "CT,C,C" \
+  -t "CT,," \
   -i ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
 ```
 
@@ -865,6 +866,12 @@ Certificate Nickname                                         Trust Attributes
 aspnetcore-localhost-{SOME_HASH}                             P,,  
 HospitalProjectCA                                            CT,, 
 ```
+
+In the parameter `-t`, `CT` means the following:
+* `C` makes the certificate as a Trusted CA for the SSL server.
+* `T` marks the certificate as a Trusted for client authentication. 
+
+This configuration is needed because the certificates that I'm generating is self signed certificate.
 
 And to remove it, run this command:
 ```
@@ -1182,6 +1189,25 @@ depth=1: CN=HospitalProjectCA
 
 When the above command was ran at depth 0 `CN=hospitalproject.api.local (untrusted)`, basically says that this certificate is not a trust store or CA Certificate. But the CA certificate is trusted. But the output against the server pem file is OK. In saying that NGINX doesn't care about this, the only cares if the certificate is valid. But usually on a normal certificate there would be an intermediary certificate which then the CA certificate will have a depth level of 2, so I left it at 2 which acts like a safety net for now. 
 
+And now checking the pfx file.
+```
+> openssl pkcs12 -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx \
+  -nokeys -passin pass:****** | grep "subject="
+subject=CN=hospitalproject.api.local
+subject=CN=HospitalProjectCA
+```
+
+The similar output appears for the client certificate instead of `CN=hospitalproject.api.local (untrusted)` appearing at depth 0, `CN=hospitalproject.local (untrusted)` appears instead.
+```
+> openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem \
+  -show_chain \
+  ~/Workspaces/Certs/hospital.project/hospital.project.client.pem
+/Users/zamk/Workspaces/Certs/hospital.project/hospital.project.client.pem: OK
+Chain:
+depth=0: CN=hospitalproject.local (untrusted)
+depth=1: CN=HospitalProjectCA
+```
+
 The same for `proxy_ssl_name` and `proxy_ssl_server_name`, this is optional because I passed in the URI with a hostname or network alias when I created the docker container not an IP address it would mandatory.
 
 Everything else remains the same. Next I created both the back and front containers with the following commands. Both contains has a network alias name, assigned to my network bridge adapter and I didn't give containers a name if I did then I'd have to delete the container and then redeploy it, IP addresses manually assign to map the subnet of my network bridge adapter and repointed the certificates to the location of where I generated the certificates with OpenSSL.
@@ -1377,6 +1403,33 @@ EOF
 Because I've exposed port 443 on Docker, a NAT transition is automatically done to docker. And now the page is loading.
 ![hospitalproject.local is working now](./images/Screenshot%20from%202026-04-05%2016-01-21.png)
 
+### MacOS mDNS (much faster!)
+Although the above options works, the page when not cached and also the API response is really slow. Then I realised that on MacOS, it has it's own called mDNS and handles the discovery of hostname(s) that end with `.local`. For now what I have been doing is running the following command:
+```
+dns-sd -P "Hospital Project" _http._tcp local 443 hospitalproject.local 127.0.0.1 &
+[1] 8233
+> Registering Service Hospital Project._http._tcp.local host hospitalproject.local port 443
+DATE: ---Fri 10 Apr 2026---
+21:22:42.762  ...STARTING...
+21:22:43.505  Got a reply for record hospitalproject.local: Name now registered and active
+21:22:43.506  Got a reply for service Hospital Project._http._tcp.local.: Name now registered and active
+```
+
+This binds the name `hospitalproject.local` and port 443 to `127.0.0.1`. I can see with this command that the mDNS and Browse were created (along with my printer on the network 😅).  
+```
+> dns-sd -B _http._tcp local & 
+[6] 11005
+> Browsing for _http._tcp.local
+DATE: ---Fri 10 Apr 2026---
+21:43:16.070  ...STARTING...
+Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+21:43:16.072  Add        3  11 local.               _http._tcp.          HP ENVY 6400 series [C5DDEE]
+21:43:16.072  Add        3   1 local.               _http._tcp.          Hospital Project
+21:43:16.073  Add        2  11 local.               _http._tcp.          Hospital Project
+```
+
+I want to automate this, but unfortunately, the man documents says the shell scripting this would be fragile. But there is another way on MacOS which I will do later! But the page and API call is much faster.
+
 But now I need to do some clean up before I create YAML files for full build and deployment. 
 
 # Clean up before proper deployment
@@ -1441,6 +1494,8 @@ try
             o.RequestHeaders.Add("X-Original-For");
             o.RequestHeaders.Add("X-Original-Proto");
         }); 
+
+        builder.Services.AddOpenApi();
     }
     ...
     builder.Services.AddForwardHeaderOptionsConfiguration(builder.Configuration, builder.Environment);
@@ -1486,6 +1541,8 @@ First of all, I added Forward Headers for HTTP logging so that the `X-Original-P
             o.RequestHeaders.Add("X-Original-For");                  <-- Here
             o.RequestHeaders.Add("X-Original-Proto");                <-- Here
         }); 
+
+        builder.Services.AddOpenApi();
     }
     ...
     var app = builder.Build();
@@ -1596,6 +1653,374 @@ The `LogForwardHeaderOptionsConfiguration()` function just logs the Forward Head
 ## SSL Configuration
 I'm going to now configure and parameterize SSL configuration both backend and frontend. On both client and server certificates, I've set the key usage to `digitalSignature`, meaning it's restricted to use ECDHE/DHE Cipher suites. This means I can use TLS version 1.2 and version 1.3. TLS version 1.3 is performant than version 1.2. But you still version 1.2 for legacy reasons. 
 
+Just saying although, I don't think I need to do this, on Windows, SSL options are already chosen for you, so you don't need to worry about it and it may be the same on Linux and MacOS where SSL cipher suites are already chosen by default, but I got curious and learnt a lot of things especially debugging with the OpenSSL tool at my last job, so I wanted to try it out 😊.
+
+### ASP.NET Core
+This is the extension class that I have created for configuring Kestrel. And I'm just configuring the default HTTPS behavior of what I want. 
+```csharp
+using System.Net.Security;
+using System.Runtime.InteropServices;
+using System.Security.Authentication;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+
+namespace HospitalProject.Server.Extensions;
+
+public static class KestrelConfigurationExtensions
+{
+    public static IWebHostBuilder ConfigureKestrelHttpsDefaults (this IWebHostBuilder webHostBuilder, IWebHostEnvironment hostEnvironment)
+    {
+
+        
+        webHostBuilder.ConfigureKestrel((context, serverOptions) =>
+        {
+            serverOptions.ConfigureHttpsDefaults(httpsOptions =>
+            {
+               httpsOptions.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+               httpsOptions.HandshakeTimeout = TimeSpan.FromSeconds(10);
+               
+               if (hostEnvironment.IsProduction())
+                {
+                    httpsOptions.CheckCertificateRevocation = true;
+                }
+
+                httpsOptions.OnAuthenticate = (connectionContext, sslOptions) =>
+                {
+                    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    {
+                        sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(new[]
+                        {
+                            // TLS 1.3 cipher suites
+                            TlsCipherSuite.TLS_AES_256_GCM_SHA384,
+                            TlsCipherSuite.TLS_AES_128_GCM_SHA256,
+                            TlsCipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+                            
+                            // TLS 1.2 cipher suites
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                        }); 
+                    }
+                    sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                    sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;
+                };
+            });
+
+            serverOptions.ConfigureEndpointDefaults(endpointOptions =>
+            {
+                endpointOptions.Protocols = HttpProtocols.Http1AndHttp2;                
+            });
+
+            if (hostEnvironment.IsProduction())
+            {
+                serverOptions.Limits.MaxConcurrentConnections = 1000;
+                serverOptions.Limits.MaxRequestBodySize = 10485760;
+            }
+        });
+
+        return webHostBuilder;
+    }
+}
+```
+
+A few things, In `KestrelServerOptions.ConfigureHttpsDefaults()`, `httpsOptions.SslProtocols` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.SslProtocols`) basically allows what protocols that I want to use. Whereas `sslOptions.EnabledSslProtocols` (or `SslServerAuthenticationOptions.EnabledSslProtocols`) basically says what protocols can be matched when authentication occurs. And another thing as well `IWebHostBuilder.ConfigureKestrel()` & `KestrelServerOptions.ConfigureHttpsDefaults()` takes in `Action` delegates as parameters and to me this basically means, these will get executed when ASP.NET Core is launched and at least for `ConfigureHttpsDefaults()` each time a HTTPS endpoint is created as per [Configure endpoints for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0#configure-https). 
+
+However, with `httpsOptions.OnAuthenticate` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.OnAuthenticate`) is a variable where you assign a `Action` delegate function and it is used each time for authentication. And `sslOptions.EncryptionPolicy` (or `SslServerAuthenticationOptions.EncryptionPolicy`) and I've chosen particular cipher suites for both TLS version 1.2 and version 1.3 that supports AES encryption (since all my certificates has been encrypted with AES256). And the cipher suite is mostly based off the [TLS Cipher Suites in Windows Server 2022 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthn/tls-cipher-suites-in-windows-server-2022) in terms of order and preference.
+
+To test this and also ASP.NET Core needs to be running on Docker since that is where I want to test this. I ran the following command:  
+```
+> docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -showcerts
+```
+This command does the following, downloads the openssl image (if not downloaded already), creates a container and attaches it to my `hospital-network` bridge adapter, runs the command, and once the command finishes running the container is deleted. This the output from running the command. 
+
+```
+> docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -showcerts
+Connecting to 10.0.0.3
+CONNECTED(00000003)
+depth=1 CN=HospitalProjectCA
+verify return:1
+depth=0 CN=hospitalproject.api.local
+verify return:1
+DONE
+---
+Certificate chain
+ 0 s:CN=hospitalproject.api.local
+   i:CN=HospitalProjectCA
+   a:PKEY: RSA, 2048 (bit); sigalg: sha256WithRSAEncryption
+   v:NotBefore: Apr  9 03:53:10 2026 GMT; NotAfter: Apr  9 03:53:10 2027 GMT
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+---
+Server certificate
+subject=CN=hospitalproject.api.local
+issuer=CN=HospitalProjectCA
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: rsa_pss_rsae_sha256
+Peer Temp Key: X25519, 253 bits
+---
+SSL handshake has read 1429 bytes and written 1638 bytes
+Verification: OK
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Protocol: TLSv1.3
+Server public key is 2048 bit
+This TLS version forbids renegotiation.
+No ALPN negotiated
+Early data was not sent
+Verify return code: 0 (ok)
+---
+``` 
+
+As you can see the line `New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384` is using the first cipher for TLS version 1.3 which is `TlsCipherSuite.TLS_AES_256_GCM_SHA384`, what happens when I say I only have TLS version 1.2 ciphers by running this command:
+```
+> docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -tls1_2
+```
+
+And the output for this command is the following:
+```
+> docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -tls1_2
+CONNECTED(00000003)
+Connecting to 10.0.0.3
+depth=1 CN=HospitalProjectCA
+verify return:1
+depth=0 CN=hospitalproject.api.local
+verify return:1
+---
+Certificate chain
+ 0 s:CN=hospitalproject.api.local
+   i:CN=HospitalProjectCA
+   a:PKEY: RSA, 2048 (bit); sigalg: sha256WithRSAEncryption
+   v:NotBefore: Apr  9 03:53:10 2026 GMT; NotAfter: Apr  9 03:53:10 2027 GMT
+---
+Server certificate
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+subject=CN=hospitalproject.api.local
+issuer=CN=HospitalProjectCA
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: rsa_pss_rsae_sha256
+Peer Temp Key: X25519, 253 bits
+---
+SSL handshake has read 1319 bytes and written 318 bytes
+Verification: OK
+---
+New, TLSv1.2, Cipher is ECDHE-RSA-AES256-GCM-SHA384
+Protocol: TLSv1.2
+Server public key is 2048 bit
+Secure Renegotiation IS supported
+No ALPN negotiated
+SSL-Session:
+    Protocol  : TLSv1.2
+    Cipher    : ECDHE-RSA-AES256-GCM-SHA384
+    Session-ID: 
+    Session-ID-ctx: 
+    Master-Key: ....
+    PSK identity: None
+    PSK identity hint: None
+    SRP username: None
+    Start Time: 1775825589
+    Timeout   : 7200 (sec)
+    Verify return code: 0 (ok)
+    Extended master secret: yes
+---
+DONE
+```
+
+As per the output `New, TLSv1.2, Cipher is ECDHE-RSA-AES256-GCM-SHA384`, it is using the first TLS version 1.2 cipher available which is `TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`. What if I use a cipher that I did not define in `sslOptions.CipherSuitesPolicy` with the following command.  
+```
+> docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -tls1_2 \
+  -cipher ECDHE-ECDSA-AES128-GCM-SHA256
+```
+
+The output I get is.  
+```
+> docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -tls1_2 \
+  -cipher ECDHE-ECDSA-AES128-GCM-SHA256
+CONNECTED(00000003)
+Connecting to 10.0.0.3
+---
+no peer certificate available
+---
+No client certificate CA names sent
+---
+SSL handshake has read 7 bytes and written 173 bytes
+Verification: OK
+---
+New, (NONE), Cipher is (NONE)
+Protocol: TLSv1.2
+Secure Renegotiation IS NOT supported
+No ALPN negotiated
+SSL-Session:
+    Protocol  : TLSv1.2
+    Cipher    : 0000
+    Session-ID: 
+    Session-ID-ctx: 
+    Master-Key: ...
+    PSK identity: None
+    PSK identity hint: None
+    SRP username: None
+    Start Time: 1775826015
+    Timeout   : 7200 (sec)
+    Verify return code: 0 (ok)
+    Extended master secret: no
+---
+20CDF29FFFFF0000:error:0A000410:SSL routines:ssl3_read_bytes:ssl/tls alert handshake failure:ssl/record/rec_layer_s3.c:918:SSL alert number 40
+```
+
+The server did not agree with the client on the cipher suite that's why no certificate string was sent back in the response. Along with the error line `20CDF29FFFFF0000:error:0A000410:SSL routines:ssl3_read_bytes:ssl/tls alert handshake failure:ssl/record/rec_layer_s3.c:918:SSL alert number 40`.
+
+Lastly, what happens when I select a cipher that is in the list but it's not the first cipher available for version 1.3 and version 1.2, am I allowed to do that? Yes I can:
+
+For version 1.3:
+```
+docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -tls1_3 \
+  -ciphersuites TLS_AES_128_GCM_SHA256
+CONNECTED(00000003)
+Connecting to 10.0.0.3
+depth=1 CN=HospitalProjectCA
+verify return:1
+depth=0 CN=hospitalproject.api.local
+verify return:1
+DONE
+---
+Certificate chain
+ 0 s:CN=hospitalproject.api.local
+   i:CN=HospitalProjectCA
+   a:PKEY: RSA, 2048 (bit); sigalg: sha256WithRSAEncryption
+   v:NotBefore: Apr  9 03:53:10 2026 GMT; NotAfter: Apr  9 03:53:10 2027 GMT
+---
+Server certificate
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+subject=CN=hospitalproject.api.local
+issuer=CN=HospitalProjectCA
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: rsa_pss_rsae_sha256
+Peer Temp Key: X25519, 253 bits
+---
+SSL handshake has read 1413 bytes and written 1545 bytes
+Verification: OK
+---
+New, TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256
+Protocol: TLSv1.3
+Server public key is 2048 bit
+This TLS version forbids renegotiation.
+No ALPN negotiated
+Early data was not sent
+Verify return code: 0 (ok)
+---
+```
+
+For version 1.2:
+```
+% docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -tls1_2 \
+  -cipher TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+Connecting to 10.0.0.3
+CONNECTED(00000003)
+depth=1 CN=HospitalProjectCA
+verify return:1
+depth=0 CN=hospitalproject.api.local
+verify return:1
+---
+Certificate chain
+ 0 s:CN=hospitalproject.api.local
+   i:CN=HospitalProjectCA
+   a:PKEY: RSA, 2048 (bit); sigalg: sha256WithRSAEncryption
+   v:NotBefore: Apr  9 03:53:10 2026 GMT; NotAfter: Apr  9 03:53:10 2027 GMT
+---
+Server certificate
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+subject=CN=hospitalproject.api.local
+issuer=CN=HospitalProjectCA
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: rsa_pss_rsae_sha256
+Peer Temp Key: X25519, 253 bits
+---
+SSL handshake has read 1311 bytes and written 258 bytes
+Verification: OK
+---
+New, TLSv1.2, Cipher is ECDHE-RSA-CHACHA20-POLY1305
+Protocol: TLSv1.2
+Server public key is 2048 bit
+Secure Renegotiation IS supported
+No ALPN negotiated
+SSL-Session:
+    Protocol  : TLSv1.2
+    Cipher    : ECDHE-RSA-CHACHA20-POLY1305
+    Session-ID: 
+    Session-ID-ctx: 
+    Master-Key: ...
+    PSK identity: None
+    PSK identity hint: None
+    SRP username: None
+    Start Time: 1775827005
+    Timeout   : 7200 (sec)
+    Verify return code: 0 (ok)
+    Extended master secret: yes
+---
+DONE
+```
+
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
 * [Dockerfile reference | Docker Docs](https://docs.docker.com/reference/dockerfile/)
 * [Best practices | Docker Docs](https://docs.docker.com/build/building/best-practices/)
@@ -1618,3 +2043,5 @@ I'm going to now configure and parameterize SSL configuration both backend and f
 * [openssl-verification-options - OpenSSL Documentation](https://docs.openssl.org/3.0/man1/openssl-verification-options/)
 * [verify - OpenSSL Documentation](https://docs.openssl.org/1.0.2/man1/verify/)
 * [Ubuntu Manpage: certutil - Manage keys and certificate in both NSS databases and other NSS tokens](https://manpages.ubuntu.com/manpages/xenial/man1/certutil.1.html)
+* [Configure endpoints for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0#configure-https)
+* [TLS Cipher Suites in Windows Server 2022 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthn/tls-cipher-suites-in-windows-server-2022)

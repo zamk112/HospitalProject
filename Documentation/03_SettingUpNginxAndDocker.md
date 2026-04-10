@@ -2045,3 +2045,5 @@ DONE
 * [Ubuntu Manpage: certutil - Manage keys and certificate in both NSS databases and other NSS tokens](https://manpages.ubuntu.com/manpages/xenial/man1/certutil.1.html)
 * [Configure endpoints for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0#configure-https)
 * [TLS Cipher Suites in Windows Server 2022 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthn/tls-cipher-suites-in-windows-server-2022)
+* [openssl s_client commands and examples - Mister PKI](https://www.misterpki.com/openssl-s-client/)
+* [openssl-s_client - OpenSSL Documentation](https://docs.openssl.org/3.0/man1/openssl-s_client/)

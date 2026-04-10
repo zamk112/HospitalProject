@@ -852,7 +852,7 @@ On Ubuntu, I use Chromium based browsers like Google Chrome or Brave and both of
 > certutil -A \
   -d ~/.pki/nssdb \
   -n "HospitalProjectCA" \
-  -t "CT,," \
+  -t "CT,C,C" \
   -i ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
 ```
 
@@ -971,9 +971,9 @@ And I'm going to verify everything is all good with the CA and my server certifi
 > openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem \
   ~/Workspaces/Certs/hospital.project/hospital.project.server.pem
 /Users/zamk/Workspaces/Certs/hospital.project/hospital.project.server.pem: OK
-> openssl pkcs12 -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx \
-  -clcerts -nokeys -passin pass:*********** | \
-  openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
+    > openssl pkcs12 -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx \
+    -clcerts -nokeys -passin pass:*********** | \
+    openssl verify -CAfile ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem
 stdin: OK
 ```
 
@@ -1009,7 +1009,7 @@ And the SANs and all the other attributes that I specified in the `v3_req` & fro
 
 The output is the same when inspecting the pfx file.  
 ```
-% openssl pkcs12 -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx \
+> openssl pkcs12 -in ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx \
   -passin pass:******** -clcerts -nokeys | \
   openssl x509 -noout -text | \
   grep -E -A 3 '(X509v3|Serial Number|Issuer)'
@@ -1193,7 +1193,7 @@ Everything else remains the same. Next I created both the back and front contain
 -e ASPNETCORE_ENVIRONMENT=Staging \
 -e ASPNETCORE_ForwardedHeaders_Enabled=true \
 -e ASPNETCORE_KnownProxies__0=10.0.0.2 \
--v ~/Workspaces/Certs/dotnet/hospitalproject.server.pfx:/https/hospitalproject.server.pfx:ro \
+-v ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx:/https/hospitalproject.server.pfx:ro \
 -v ~/Projects/HospitalProject/HospitalProject.Server/appsettings.Staging.json:/app/appsettings.Staging.json:ro \
 hospital.project.server
 a0bb6b87a96481d0aab1f487db47111a905e7af9199ccfad4508515c8981fe89
@@ -1617,3 +1617,4 @@ I'm going to now configure and parameterize SSL configuration both backend and f
 * [openssl verify returns ok but certificate is untrusted · Issue #21870 · openssl/openssl](https://github.com/openssl/openssl/issues/21870)
 * [openssl-verification-options - OpenSSL Documentation](https://docs.openssl.org/3.0/man1/openssl-verification-options/)
 * [verify - OpenSSL Documentation](https://docs.openssl.org/1.0.2/man1/verify/)
+* [Ubuntu Manpage: certutil - Manage keys and certificate in both NSS databases and other NSS tokens](https://manpages.ubuntu.com/manpages/xenial/man1/certutil.1.html)

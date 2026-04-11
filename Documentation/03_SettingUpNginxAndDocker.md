@@ -316,7 +316,7 @@ But before I start fixing and creating *.yaml files, the next thing I need to do
 First thing I'm going to talk about is the [Dockerfile](../HospitalProject.Client/Dockerfile), it's really straightforward (at the moment).  
 ```dockerfile
 ARG NODE_VERSION=current-alpine
-ARG NGINX_VERSION=stable-alpine
+ARG NGINX_VERSION=mainline-alpine
 
 FROM node:${NODE_VERSION} AS builder
 WORKDIR /app
@@ -346,9 +346,11 @@ Dockerfile
 Based on the arguments that I have set at the beginning, I am using the current and stable version of both Node.js and NGIX respectively (Real World scenario would be to pick a specific version and stick to it until the newer version is completely tested, but I just want to see what breaks with the latest stable release that comes out).   
 ```dockerfile
 ARG NODE_VERSION=current-alpine
-ARG NGINX_VERSION=stable-alpine
+ARG NGINX_VERSION=mainline-alpine
 ...
 ```
+
+Initially `NGINX_VERSION` was `stable-alpine`, but for some reason this image does not have support for HTTP 2 for when doing reverse proxy API calls to the backend. 
 
 The next part which is the building the ReactJS app is quite interesting:  
 ```dockerfile
@@ -564,7 +566,7 @@ http {
 }
 ```
 
-This is actually the bear minimum that I need to run both NGIX and ReactJS, worker process (4 cores on linux) and worker connections (512 worker connections) are pretty much defaulting to the NGIX default values. The server is using SSL with HTTP2 with the server name being **localhost**. And I also had to add `include /etc/nginx/mime.types;` otherwise the server does not dish out the CSS, HTML and JavaScript files to the browser. Before adding the following configuration to the file. NGIX failed to start because it needed these directories:  
+This is actually the bare minimum that I need to run both NGIX and ReactJS, worker process (4 cores on linux) and worker connections (512 worker connections) are pretty much defaulting to the NGIX default values. The server is using SSL with HTTP2 with the server name being **localhost**. And I also had to add `include /etc/nginx/mime.types;` otherwise the server does not dish out the CSS, HTML and JavaScript files to the browser. Before adding the following configuration to the file. NGIX failed to start because it needed these directories:  
 ```
         client_body_temp_path   /tmp/client_temp;
         proxy_temp_path         /tmp/proxy_temp;
@@ -1653,7 +1655,7 @@ The `LogForwardHeaderOptionsConfiguration()` function just logs the Forward Head
 ## SSL Configuration
 I'm going to now configure and parameterize SSL configuration both backend and frontend. On both client and server certificates, I've set the key usage to `digitalSignature`, meaning it's restricted to use ECDHE/DHE Cipher suites. This means I can use TLS version 1.2 and version 1.3. TLS version 1.3 is performant than version 1.2. But you still version 1.2 for legacy reasons. 
 
-Just saying although, I don't think I need to do this, on Windows, SSL options are already chosen for you, so you don't need to worry about it and it may be the same on Linux and MacOS where SSL cipher suites are already chosen by default, but I got curious and learnt a lot of things especially debugging with the OpenSSL tool at my last job, so I wanted to try it out 😊.
+Just saying although, I don't think I need to do this, on Windows, SSL options are already chosen for you, so you don't need to worry about it and it will most likely be the same on Linux and MacOS where SSL cipher suites are already chosen by default (but don't know where to look at the moment), but I got curious and learnt a lot of things especially debugging with the OpenSSL tool at my last job, so I wanted to try it out 😊.
 
 ### ASP.NET Core
 This is the extension class that I have created for configuring Kestrel. And I'm just configuring the default HTTPS behavior of what I want. 
@@ -1685,6 +1687,12 @@ public static class KestrelConfigurationExtensions
 
                 httpsOptions.OnAuthenticate = (connectionContext, sslOptions) =>
                 {
+                    sslOptions.ApplicationProtocols = new List<SslApplicationProtocol>
+                    {
+                        SslApplicationProtocol.Http2,
+                        SslApplicationProtocol.Http11
+                    };
+
                     if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                     {
                         sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(new[]
@@ -1696,7 +1704,6 @@ public static class KestrelConfigurationExtensions
                             
                             // TLS 1.2 cipher suites
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
                         }); 
                     }
@@ -1785,6 +1792,55 @@ Verify return code: 0 (ok)
 ---
 ``` 
 
+In the code, The endpoint default HTTP options are HTTP 1.X or HTTP 2 as per `endpointOptions.Protocols = HttpProtocols.Http1AndHttp2` but I've also added `SslServerAuthenticationOptions.ApplicationProtocols` options, to say what HTTP protocols you can use for authentication. However, in the above output it has `No ALPN negotiated`, so I need to add another flag to the OpenSSL command which is `-alpn h2,http/1.1` and then I should get `ALPN protocol: h2` in the output.  
+```
+> docker run --rm \
+  --network=hospital-network \
+  -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
+  alpine/openssl s_client \
+  -connect hospitalproject.api.local:5229 \
+  -CAfile /ca.pem \
+  -alpn h2,http/1.1 \
+  -showcerts
+Connecting to 10.0.0.3
+CONNECTED(00000003)
+depth=1 CN=HospitalProjectCA
+verify return:1
+depth=0 CN=hospitalproject.api.local
+verify return:1
+---
+Certificate chain
+ 0 s:CN=hospitalproject.api.local
+   i:CN=HospitalProjectCA
+   a:PKEY: RSA, 2048 (bit); sigalg: sha256WithRSAEncryption
+   v:NotBefore: Apr  9 03:53:10 2026 GMT; NotAfter: Apr  9 03:53:10 2027 GMT
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+---
+Server certificate
+subject=CN=hospitalproject.api.local
+issuer=CN=HospitalProjectCA
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: rsa_pss_rsae_sha256
+Peer Temp Key: X25519, 253 bits
+---
+SSL handshake has read 1438 bytes and written 1656 bytes
+Verification: OK
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Protocol: TLSv1.3
+Server public key is 2048 bit
+This TLS version forbids renegotiation.
+ALPN protocol: h2
+Early data was not sent
+Verify return code: 0 (ok)
+---
+DONE
+```
+
 As you can see the line `New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384` is using the first cipher for TLS version 1.3 which is `TlsCipherSuite.TLS_AES_256_GCM_SHA384`, what happens when I say I only have TLS version 1.2 ciphers by running this command:
 ```
 > docker run --rm \
@@ -1793,24 +1849,27 @@ As you can see the line `New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384` is usin
   alpine/openssl s_client \
   -connect hospitalproject.api.local:5229 \
   -CAfile /ca.pem \
+  -alpn h2,http/1.1 \
   -tls1_2
 ```
 
 And the output for this command is the following:
 ```
-> docker run --rm \
+> % docker run --rm \
   --network=hospital-network \
   -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
   alpine/openssl s_client \
   -connect hospitalproject.api.local:5229 \
   -CAfile /ca.pem \
+  -alpn h2,http/1.1 \
   -tls1_2
-CONNECTED(00000003)
 Connecting to 10.0.0.3
+CONNECTED(00000003)
 depth=1 CN=HospitalProjectCA
 verify return:1
 depth=0 CN=hospitalproject.api.local
 verify return:1
+DONE
 ---
 Certificate chain
  0 s:CN=hospitalproject.api.local
@@ -1830,29 +1889,28 @@ Peer signing digest: SHA256
 Peer signature type: rsa_pss_rsae_sha256
 Peer Temp Key: X25519, 253 bits
 ---
-SSL handshake has read 1319 bytes and written 318 bytes
+SSL handshake has read 1328 bytes and written 336 bytes
 Verification: OK
 ---
 New, TLSv1.2, Cipher is ECDHE-RSA-AES256-GCM-SHA384
 Protocol: TLSv1.2
 Server public key is 2048 bit
 Secure Renegotiation IS supported
-No ALPN negotiated
+ALPN protocol: h2
 SSL-Session:
     Protocol  : TLSv1.2
     Cipher    : ECDHE-RSA-AES256-GCM-SHA384
     Session-ID: 
     Session-ID-ctx: 
-    Master-Key: ....
+    Master-Key: ...
     PSK identity: None
     PSK identity hint: None
     SRP username: None
-    Start Time: 1775825589
+    Start Time: 1775887676
     Timeout   : 7200 (sec)
     Verify return code: 0 (ok)
     Extended master secret: yes
 ---
-DONE
 ```
 
 As per the output `New, TLSv1.2, Cipher is ECDHE-RSA-AES256-GCM-SHA384`, it is using the first TLS version 1.2 cipher available which is `TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`. What if I use a cipher that I did not define in `sslOptions.CipherSuitesPolicy` with the following command.  
@@ -1864,6 +1922,7 @@ As per the output `New, TLSv1.2, Cipher is ECDHE-RSA-AES256-GCM-SHA384`, it is u
   -connect hospitalproject.api.local:5229 \
   -CAfile /ca.pem \
   -tls1_2 \
+  -alpn h2,http/1.1 \
   -cipher ECDHE-ECDSA-AES128-GCM-SHA256
 ```
 
@@ -1876,15 +1935,16 @@ The output I get is.
   -connect hospitalproject.api.local:5229 \
   -CAfile /ca.pem \
   -tls1_2 \
+  -alpn h2,http/1.1 \
   -cipher ECDHE-ECDSA-AES128-GCM-SHA256
-CONNECTED(00000003)
 Connecting to 10.0.0.3
+CONNECTED(00000003)
 ---
 no peer certificate available
 ---
 No client certificate CA names sent
 ---
-SSL handshake has read 7 bytes and written 173 bytes
+SSL handshake has read 7 bytes and written 191 bytes
 Verification: OK
 ---
 New, (NONE), Cipher is (NONE)
@@ -1896,16 +1956,16 @@ SSL-Session:
     Cipher    : 0000
     Session-ID: 
     Session-ID-ctx: 
-    Master-Key: ...
+    Master-Key: 
     PSK identity: None
     PSK identity hint: None
     SRP username: None
-    Start Time: 1775826015
+    Start Time: 1775887744
     Timeout   : 7200 (sec)
     Verify return code: 0 (ok)
     Extended master secret: no
 ---
-20CDF29FFFFF0000:error:0A000410:SSL routines:ssl3_read_bytes:ssl/tls alert handshake failure:ssl/record/rec_layer_s3.c:918:SSL alert number 40
+20CD169AFFFF0000:error:0A000410:SSL routines:ssl3_read_bytes:ssl/tls alert handshake failure:ssl/record/rec_layer_s3.c:918:SSL alert number 40
 ```
 
 The server did not agree with the client on the cipher suite that's why no certificate string was sent back in the response. Along with the error line `20CDF29FFFFF0000:error:0A000410:SSL routines:ssl3_read_bytes:ssl/tls alert handshake failure:ssl/record/rec_layer_s3.c:918:SSL alert number 40`.
@@ -1914,16 +1974,17 @@ Lastly, what happens when I select a cipher that is in the list but it's not the
 
 For version 1.3:
 ```
-docker run --rm \
+> % docker run --rm \
   --network=hospital-network \
   -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
   alpine/openssl s_client \
   -connect hospitalproject.api.local:5229 \
   -CAfile /ca.pem \
   -tls1_3 \
+  -alpn h2,http/1.1 \
   -ciphersuites TLS_AES_128_GCM_SHA256
-CONNECTED(00000003)
 Connecting to 10.0.0.3
+CONNECTED(00000003)
 depth=1 CN=HospitalProjectCA
 verify return:1
 depth=0 CN=hospitalproject.api.local
@@ -1948,14 +2009,14 @@ Peer signing digest: SHA256
 Peer signature type: rsa_pss_rsae_sha256
 Peer Temp Key: X25519, 253 bits
 ---
-SSL handshake has read 1413 bytes and written 1545 bytes
+SSL handshake has read 1422 bytes and written 1563 bytes
 Verification: OK
 ---
 New, TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256
 Protocol: TLSv1.3
 Server public key is 2048 bit
 This TLS version forbids renegotiation.
-No ALPN negotiated
+ALPN protocol: h2
 Early data was not sent
 Verify return code: 0 (ok)
 ---
@@ -1963,13 +2024,14 @@ Verify return code: 0 (ok)
 
 For version 1.2:
 ```
-% docker run --rm \
+> docker run --rm \
   --network=hospital-network \
   -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
   alpine/openssl s_client \
   -connect hospitalproject.api.local:5229 \
   -CAfile /ca.pem \
   -tls1_2 \
+  -alpn h2,http/1.1 \
   -cipher TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
 Connecting to 10.0.0.3
 CONNECTED(00000003)
@@ -1996,14 +2058,14 @@ Peer signing digest: SHA256
 Peer signature type: rsa_pss_rsae_sha256
 Peer Temp Key: X25519, 253 bits
 ---
-SSL handshake has read 1311 bytes and written 258 bytes
+SSL handshake has read 1320 bytes and written 276 bytes
 Verification: OK
 ---
 New, TLSv1.2, Cipher is ECDHE-RSA-CHACHA20-POLY1305
 Protocol: TLSv1.2
 Server public key is 2048 bit
 Secure Renegotiation IS supported
-No ALPN negotiated
+ALPN protocol: h2
 SSL-Session:
     Protocol  : TLSv1.2
     Cipher    : ECDHE-RSA-CHACHA20-POLY1305
@@ -2013,13 +2075,438 @@ SSL-Session:
     PSK identity: None
     PSK identity hint: None
     SRP username: None
-    Start Time: 1775827005
+    Start Time: 1775887995
     Timeout   : 7200 (sec)
     Verify return code: 0 (ok)
     Extended master secret: yes
 ---
 DONE
 ```
+
+### NGINX
+Now that I've done ASP.NET Core, now it is time for NGINX. And I've just added 2 lines, which are the following in [staging.nginx.conf](../HospitalProject.Client/staging.nginx.conf). Although, this is not needed and it is used by default on NGINX but I thought to include it anyways 😊. 
+```
+...
+        ssl_protocols           TLSv1.2 TLSv1.3;
+        ssl_ciphers             HIGH:!aNULL:!MD5;
+...
+```
+
+The first line `ssl_protocols` directive specifies which TLS version that the server can use, which is TLS version 1.2 and version 1.3. And then the next one is `ssl_ciphers` with the value of `HIGH:!aNULL:!MD5;`. To break down this string:  
+* `HIGH` - any cipher suite that uses 128 bit encryption or higher. To find out the cipher suites that are of `HIGH` category. I ran this command:  
+  ```
+  > openssl ciphers -V 'HIGH'            
+          0x13,0x02 - TLS_AES_256_GCM_SHA384         TLSv1.3 Kx=any      Au=any   Enc=AESGCM(256)            Mac=AEAD
+          0x13,0x03 - TLS_CHACHA20_POLY1305_SHA256   TLSv1.3 Kx=any      Au=any   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0x13,0x01 - TLS_AES_128_GCM_SHA256         TLSv1.3 Kx=any      Au=any   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0x2C - ECDHE-ECDSA-AES256-GCM-SHA384  TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AESGCM(256)            Mac=AEAD
+          0xC0,0x30 - ECDHE-RSA-AES256-GCM-SHA384    TLSv1.2 Kx=ECDH     Au=RSA   Enc=AESGCM(256)            Mac=AEAD
+          0x00,0xA3 - DHE-DSS-AES256-GCM-SHA384      TLSv1.2 Kx=DH       Au=DSS   Enc=AESGCM(256)            Mac=AEAD
+          0x00,0x9F - DHE-RSA-AES256-GCM-SHA384      TLSv1.2 Kx=DH       Au=RSA   Enc=AESGCM(256)            Mac=AEAD
+          0xCC,0xA9 - ECDHE-ECDSA-CHACHA20-POLY1305  TLSv1.2 Kx=ECDH     Au=ECDSA Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xCC,0xA8 - ECDHE-RSA-CHACHA20-POLY1305    TLSv1.2 Kx=ECDH     Au=RSA   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xCC,0xAA - DHE-RSA-CHACHA20-POLY1305      TLSv1.2 Kx=DH       Au=RSA   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xC0,0xAD - ECDHE-ECDSA-AES256-CCM         TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x9F - DHE-RSA-AES256-CCM             TLSv1.2 Kx=DH       Au=RSA   Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x5D - ECDHE-ECDSA-ARIA256-GCM-SHA384 TLSv1.2 Kx=ECDH     Au=ECDSA Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x61 - ECDHE-ARIA256-GCM-SHA384       TLSv1.2 Kx=ECDH     Au=RSA   Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x57 - DHE-DSS-ARIA256-GCM-SHA384     TLSv1.2 Kx=DH       Au=DSS   Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x53 - DHE-RSA-ARIA256-GCM-SHA384     TLSv1.2 Kx=DH       Au=RSA   Enc=ARIAGCM(256)           Mac=AEAD
+          0x00,0xA7 - ADH-AES256-GCM-SHA384          TLSv1.2 Kx=DH       Au=None  Enc=AESGCM(256)            Mac=AEAD
+          0xC0,0x2B - ECDHE-ECDSA-AES128-GCM-SHA256  TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0x2F - ECDHE-RSA-AES128-GCM-SHA256    TLSv1.2 Kx=ECDH     Au=RSA   Enc=AESGCM(128)            Mac=AEAD
+          0x00,0xA2 - DHE-DSS-AES128-GCM-SHA256      TLSv1.2 Kx=DH       Au=DSS   Enc=AESGCM(128)            Mac=AEAD
+          0x00,0x9E - DHE-RSA-AES128-GCM-SHA256      TLSv1.2 Kx=DH       Au=RSA   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0xAC - ECDHE-ECDSA-AES128-CCM         TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x9E - DHE-RSA-AES128-CCM             TLSv1.2 Kx=DH       Au=RSA   Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x5C - ECDHE-ECDSA-ARIA128-GCM-SHA256 TLSv1.2 Kx=ECDH     Au=ECDSA Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x60 - ECDHE-ARIA128-GCM-SHA256       TLSv1.2 Kx=ECDH     Au=RSA   Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x56 - DHE-DSS-ARIA128-GCM-SHA256     TLSv1.2 Kx=DH       Au=DSS   Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x52 - DHE-RSA-ARIA128-GCM-SHA256     TLSv1.2 Kx=DH       Au=RSA   Enc=ARIAGCM(128)           Mac=AEAD
+          0x00,0xA6 - ADH-AES128-GCM-SHA256          TLSv1.2 Kx=DH       Au=None  Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0x24 - ECDHE-ECDSA-AES256-SHA384      TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AES(256)               Mac=SHA384
+          0xC0,0x28 - ECDHE-RSA-AES256-SHA384        TLSv1.2 Kx=ECDH     Au=RSA   Enc=AES(256)               Mac=SHA384
+          0x00,0x6B - DHE-RSA-AES256-SHA256          TLSv1.2 Kx=DH       Au=RSA   Enc=AES(256)               Mac=SHA256
+          0x00,0x6A - DHE-DSS-AES256-SHA256          TLSv1.2 Kx=DH       Au=DSS   Enc=AES(256)               Mac=SHA256
+          0xC0,0x73 - ECDHE-ECDSA-CAMELLIA256-SHA384 TLSv1.2 Kx=ECDH     Au=ECDSA Enc=Camellia(256)          Mac=SHA384
+          0xC0,0x77 - ECDHE-RSA-CAMELLIA256-SHA384   TLSv1.2 Kx=ECDH     Au=RSA   Enc=Camellia(256)          Mac=SHA384
+          0x00,0xC4 - DHE-RSA-CAMELLIA256-SHA256     TLSv1.2 Kx=DH       Au=RSA   Enc=Camellia(256)          Mac=SHA256
+          0x00,0xC3 - DHE-DSS-CAMELLIA256-SHA256     TLSv1.2 Kx=DH       Au=DSS   Enc=Camellia(256)          Mac=SHA256
+          0x00,0x6D - ADH-AES256-SHA256              TLSv1.2 Kx=DH       Au=None  Enc=AES(256)               Mac=SHA256
+          0x00,0xC5 - ADH-CAMELLIA256-SHA256         TLSv1.2 Kx=DH       Au=None  Enc=Camellia(256)          Mac=SHA256
+          0xC0,0x23 - ECDHE-ECDSA-AES128-SHA256      TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AES(128)               Mac=SHA256
+          0xC0,0x27 - ECDHE-RSA-AES128-SHA256        TLSv1.2 Kx=ECDH     Au=RSA   Enc=AES(128)               Mac=SHA256
+          0x00,0x67 - DHE-RSA-AES128-SHA256          TLSv1.2 Kx=DH       Au=RSA   Enc=AES(128)               Mac=SHA256
+          0x00,0x40 - DHE-DSS-AES128-SHA256          TLSv1.2 Kx=DH       Au=DSS   Enc=AES(128)               Mac=SHA256
+          0xC0,0x72 - ECDHE-ECDSA-CAMELLIA128-SHA256 TLSv1.2 Kx=ECDH     Au=ECDSA Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x76 - ECDHE-RSA-CAMELLIA128-SHA256   TLSv1.2 Kx=ECDH     Au=RSA   Enc=Camellia(128)          Mac=SHA256
+          0x00,0xBE - DHE-RSA-CAMELLIA128-SHA256     TLSv1.2 Kx=DH       Au=RSA   Enc=Camellia(128)          Mac=SHA256
+          0x00,0xBD - DHE-DSS-CAMELLIA128-SHA256     TLSv1.2 Kx=DH       Au=DSS   Enc=Camellia(128)          Mac=SHA256
+          0x00,0x6C - ADH-AES128-SHA256              TLSv1.2 Kx=DH       Au=None  Enc=AES(128)               Mac=SHA256
+          0x00,0xBF - ADH-CAMELLIA128-SHA256         TLSv1.2 Kx=DH       Au=None  Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x0A - ECDHE-ECDSA-AES256-SHA         TLSv1   Kx=ECDH     Au=ECDSA Enc=AES(256)               Mac=SHA1
+          0xC0,0x14 - ECDHE-RSA-AES256-SHA           TLSv1   Kx=ECDH     Au=RSA   Enc=AES(256)               Mac=SHA1
+          0x00,0x39 - DHE-RSA-AES256-SHA             SSLv3   Kx=DH       Au=RSA   Enc=AES(256)               Mac=SHA1
+          0x00,0x38 - DHE-DSS-AES256-SHA             SSLv3   Kx=DH       Au=DSS   Enc=AES(256)               Mac=SHA1
+          0x00,0x88 - DHE-RSA-CAMELLIA256-SHA        SSLv3   Kx=DH       Au=RSA   Enc=Camellia(256)          Mac=SHA1
+          0x00,0x87 - DHE-DSS-CAMELLIA256-SHA        SSLv3   Kx=DH       Au=DSS   Enc=Camellia(256)          Mac=SHA1
+          0xC0,0x19 - AECDH-AES256-SHA               TLSv1   Kx=ECDH     Au=None  Enc=AES(256)               Mac=SHA1
+          0x00,0x3A - ADH-AES256-SHA                 SSLv3   Kx=DH       Au=None  Enc=AES(256)               Mac=SHA1
+          0x00,0x89 - ADH-CAMELLIA256-SHA            SSLv3   Kx=DH       Au=None  Enc=Camellia(256)          Mac=SHA1
+          0xC0,0x09 - ECDHE-ECDSA-AES128-SHA         TLSv1   Kx=ECDH     Au=ECDSA Enc=AES(128)               Mac=SHA1
+          0xC0,0x13 - ECDHE-RSA-AES128-SHA           TLSv1   Kx=ECDH     Au=RSA   Enc=AES(128)               Mac=SHA1
+          0x00,0x33 - DHE-RSA-AES128-SHA             SSLv3   Kx=DH       Au=RSA   Enc=AES(128)               Mac=SHA1
+          0x00,0x32 - DHE-DSS-AES128-SHA             SSLv3   Kx=DH       Au=DSS   Enc=AES(128)               Mac=SHA1
+          0x00,0x45 - DHE-RSA-CAMELLIA128-SHA        SSLv3   Kx=DH       Au=RSA   Enc=Camellia(128)          Mac=SHA1
+          0x00,0x44 - DHE-DSS-CAMELLIA128-SHA        SSLv3   Kx=DH       Au=DSS   Enc=Camellia(128)          Mac=SHA1
+          0xC0,0x18 - AECDH-AES128-SHA               TLSv1   Kx=ECDH     Au=None  Enc=AES(128)               Mac=SHA1
+          0x00,0x34 - ADH-AES128-SHA                 SSLv3   Kx=DH       Au=None  Enc=AES(128)               Mac=SHA1
+          0x00,0x46 - ADH-CAMELLIA128-SHA            SSLv3   Kx=DH       Au=None  Enc=Camellia(128)          Mac=SHA1
+          0x00,0xAD - RSA-PSK-AES256-GCM-SHA384      TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=AESGCM(256)            Mac=AEAD
+          0x00,0xAB - DHE-PSK-AES256-GCM-SHA384      TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=AESGCM(256)            Mac=AEAD
+          0xCC,0xAE - RSA-PSK-CHACHA20-POLY1305      TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xCC,0xAD - DHE-PSK-CHACHA20-POLY1305      TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xCC,0xAC - ECDHE-PSK-CHACHA20-POLY1305    TLSv1.2 Kx=ECDHEPSK Au=PSK   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xC0,0xA7 - DHE-PSK-AES256-CCM             TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x6F - RSA-PSK-ARIA256-GCM-SHA384     TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x6D - DHE-PSK-ARIA256-GCM-SHA384     TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=ARIAGCM(256)           Mac=AEAD
+          0x00,0x9D - AES256-GCM-SHA384              TLSv1.2 Kx=RSA      Au=RSA   Enc=AESGCM(256)            Mac=AEAD
+          0xC0,0x9D - AES256-CCM                     TLSv1.2 Kx=RSA      Au=RSA   Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x51 - ARIA256-GCM-SHA384             TLSv1.2 Kx=RSA      Au=RSA   Enc=ARIAGCM(256)           Mac=AEAD
+          0x00,0xA9 - PSK-AES256-GCM-SHA384          TLSv1.2 Kx=PSK      Au=PSK   Enc=AESGCM(256)            Mac=AEAD
+          0xCC,0xAB - PSK-CHACHA20-POLY1305          TLSv1.2 Kx=PSK      Au=PSK   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xC0,0xA5 - PSK-AES256-CCM                 TLSv1.2 Kx=PSK      Au=PSK   Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x6B - PSK-ARIA256-GCM-SHA384         TLSv1.2 Kx=PSK      Au=PSK   Enc=ARIAGCM(256)           Mac=AEAD
+          0x00,0xAC - RSA-PSK-AES128-GCM-SHA256      TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=AESGCM(128)            Mac=AEAD
+          0x00,0xAA - DHE-PSK-AES128-GCM-SHA256      TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0xA6 - DHE-PSK-AES128-CCM             TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x6E - RSA-PSK-ARIA128-GCM-SHA256     TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x6C - DHE-PSK-ARIA128-GCM-SHA256     TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=ARIAGCM(128)           Mac=AEAD
+          0x00,0x9C - AES128-GCM-SHA256              TLSv1.2 Kx=RSA      Au=RSA   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0x9C - AES128-CCM                     TLSv1.2 Kx=RSA      Au=RSA   Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x50 - ARIA128-GCM-SHA256             TLSv1.2 Kx=RSA      Au=RSA   Enc=ARIAGCM(128)           Mac=AEAD
+          0x00,0xA8 - PSK-AES128-GCM-SHA256          TLSv1.2 Kx=PSK      Au=PSK   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0xA4 - PSK-AES128-CCM                 TLSv1.2 Kx=PSK      Au=PSK   Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x6A - PSK-ARIA128-GCM-SHA256         TLSv1.2 Kx=PSK      Au=PSK   Enc=ARIAGCM(128)           Mac=AEAD
+          0x00,0x3D - AES256-SHA256                  TLSv1.2 Kx=RSA      Au=RSA   Enc=AES(256)               Mac=SHA256
+          0x00,0xC0 - CAMELLIA256-SHA256             TLSv1.2 Kx=RSA      Au=RSA   Enc=Camellia(256)          Mac=SHA256
+          0x00,0x3C - AES128-SHA256                  TLSv1.2 Kx=RSA      Au=RSA   Enc=AES(128)               Mac=SHA256
+          0x00,0xBA - CAMELLIA128-SHA256             TLSv1.2 Kx=RSA      Au=RSA   Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x38 - ECDHE-PSK-AES256-CBC-SHA384    TLSv1   Kx=ECDHEPSK Au=PSK   Enc=AES(256)               Mac=SHA384
+          0xC0,0x36 - ECDHE-PSK-AES256-CBC-SHA       TLSv1   Kx=ECDHEPSK Au=PSK   Enc=AES(256)               Mac=SHA1
+          0xC0,0x22 - SRP-DSS-AES-256-CBC-SHA        SSLv3   Kx=SRP      Au=DSS   Enc=AES(256)               Mac=SHA1
+          0xC0,0x21 - SRP-RSA-AES-256-CBC-SHA        SSLv3   Kx=SRP      Au=RSA   Enc=AES(256)               Mac=SHA1
+          0xC0,0x20 - SRP-AES-256-CBC-SHA            SSLv3   Kx=SRP      Au=SRP   Enc=AES(256)               Mac=SHA1
+          0x00,0xB7 - RSA-PSK-AES256-CBC-SHA384      TLSv1   Kx=RSAPSK   Au=RSA   Enc=AES(256)               Mac=SHA384
+          0x00,0xB3 - DHE-PSK-AES256-CBC-SHA384      TLSv1   Kx=DHEPSK   Au=PSK   Enc=AES(256)               Mac=SHA384
+          0x00,0x95 - RSA-PSK-AES256-CBC-SHA         SSLv3   Kx=RSAPSK   Au=RSA   Enc=AES(256)               Mac=SHA1
+          0x00,0x91 - DHE-PSK-AES256-CBC-SHA         SSLv3   Kx=DHEPSK   Au=PSK   Enc=AES(256)               Mac=SHA1
+          0xC0,0x9B - ECDHE-PSK-CAMELLIA256-SHA384   TLSv1   Kx=ECDHEPSK Au=PSK   Enc=Camellia(256)          Mac=SHA384
+          0xC0,0x99 - RSA-PSK-CAMELLIA256-SHA384     TLSv1   Kx=RSAPSK   Au=RSA   Enc=Camellia(256)          Mac=SHA384
+          0xC0,0x97 - DHE-PSK-CAMELLIA256-SHA384     TLSv1   Kx=DHEPSK   Au=PSK   Enc=Camellia(256)          Mac=SHA384
+          0x00,0x35 - AES256-SHA                     SSLv3   Kx=RSA      Au=RSA   Enc=AES(256)               Mac=SHA1
+          0x00,0x84 - CAMELLIA256-SHA                SSLv3   Kx=RSA      Au=RSA   Enc=Camellia(256)          Mac=SHA1
+          0x00,0xAF - PSK-AES256-CBC-SHA384          TLSv1   Kx=PSK      Au=PSK   Enc=AES(256)               Mac=SHA384
+          0x00,0x8D - PSK-AES256-CBC-SHA             SSLv3   Kx=PSK      Au=PSK   Enc=AES(256)               Mac=SHA1
+          0xC0,0x95 - PSK-CAMELLIA256-SHA384         TLSv1   Kx=PSK      Au=PSK   Enc=Camellia(256)          Mac=SHA384
+          0xC0,0x37 - ECDHE-PSK-AES128-CBC-SHA256    TLSv1   Kx=ECDHEPSK Au=PSK   Enc=AES(128)               Mac=SHA256
+          0xC0,0x35 - ECDHE-PSK-AES128-CBC-SHA       TLSv1   Kx=ECDHEPSK Au=PSK   Enc=AES(128)               Mac=SHA1
+          0xC0,0x1F - SRP-DSS-AES-128-CBC-SHA        SSLv3   Kx=SRP      Au=DSS   Enc=AES(128)               Mac=SHA1
+          0xC0,0x1E - SRP-RSA-AES-128-CBC-SHA        SSLv3   Kx=SRP      Au=RSA   Enc=AES(128)               Mac=SHA1
+          0xC0,0x1D - SRP-AES-128-CBC-SHA            SSLv3   Kx=SRP      Au=SRP   Enc=AES(128)               Mac=SHA1
+          0x00,0xB6 - RSA-PSK-AES128-CBC-SHA256      TLSv1   Kx=RSAPSK   Au=RSA   Enc=AES(128)               Mac=SHA256
+          0x00,0xB2 - DHE-PSK-AES128-CBC-SHA256      TLSv1   Kx=DHEPSK   Au=PSK   Enc=AES(128)               Mac=SHA256
+          0x00,0x94 - RSA-PSK-AES128-CBC-SHA         SSLv3   Kx=RSAPSK   Au=RSA   Enc=AES(128)               Mac=SHA1
+          0x00,0x90 - DHE-PSK-AES128-CBC-SHA         SSLv3   Kx=DHEPSK   Au=PSK   Enc=AES(128)               Mac=SHA1
+          0xC0,0x9A - ECDHE-PSK-CAMELLIA128-SHA256   TLSv1   Kx=ECDHEPSK Au=PSK   Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x98 - RSA-PSK-CAMELLIA128-SHA256     TLSv1   Kx=RSAPSK   Au=RSA   Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x96 - DHE-PSK-CAMELLIA128-SHA256     TLSv1   Kx=DHEPSK   Au=PSK   Enc=Camellia(128)          Mac=SHA256
+          0x00,0x2F - AES128-SHA                     SSLv3   Kx=RSA      Au=RSA   Enc=AES(128)               Mac=SHA1
+          0x00,0x41 - CAMELLIA128-SHA                SSLv3   Kx=RSA      Au=RSA   Enc=Camellia(128)          Mac=SHA1
+          0x00,0xAE - PSK-AES128-CBC-SHA256          TLSv1   Kx=PSK      Au=PSK   Enc=AES(128)               Mac=SHA256
+          0x00,0x8C - PSK-AES128-CBC-SHA             SSLv3   Kx=PSK      Au=PSK   Enc=AES(128)               Mac=SHA1
+          0xC0,0x94 - PSK-CAMELLIA128-SHA256         TLSv1   Kx=PSK      Au=PSK   Enc=Camellia(128)          Mac=SHA256
+  ```
+
+* `!aNULL` - means disable cipher suites that are not used for authentication. This is for stopping Man-In-The-Middle (MITM) attacks and getting the list of cipher suites that are not authentication based by running this command:  
+   ```
+   > openssl ciphers -V 'aNULL' 
+          0x13,0x02 - TLS_AES_256_GCM_SHA384         TLSv1.3 Kx=any      Au=any   Enc=AESGCM(256)            Mac=AEAD
+          0x13,0x03 - TLS_CHACHA20_POLY1305_SHA256   TLSv1.3 Kx=any      Au=any   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0x13,0x01 - TLS_AES_128_GCM_SHA256         TLSv1.3 Kx=any      Au=any   Enc=AESGCM(128)            Mac=AEAD
+          0x00,0xA7 - ADH-AES256-GCM-SHA384          TLSv1.2 Kx=DH       Au=None  Enc=AESGCM(256)            Mac=AEAD
+          0x00,0xA6 - ADH-AES128-GCM-SHA256          TLSv1.2 Kx=DH       Au=None  Enc=AESGCM(128)            Mac=AEAD
+          0x00,0x6D - ADH-AES256-SHA256              TLSv1.2 Kx=DH       Au=None  Enc=AES(256)               Mac=SHA256
+          0x00,0xC5 - ADH-CAMELLIA256-SHA256         TLSv1.2 Kx=DH       Au=None  Enc=Camellia(256)          Mac=SHA256
+          0x00,0x6C - ADH-AES128-SHA256              TLSv1.2 Kx=DH       Au=None  Enc=AES(128)               Mac=SHA256
+          0x00,0xBF - ADH-CAMELLIA128-SHA256         TLSv1.2 Kx=DH       Au=None  Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x19 - AECDH-AES256-SHA               TLSv1   Kx=ECDH     Au=None  Enc=AES(256)               Mac=SHA1
+          0x00,0x3A - ADH-AES256-SHA                 SSLv3   Kx=DH       Au=None  Enc=AES(256)               Mac=SHA1
+          0x00,0x89 - ADH-CAMELLIA256-SHA            SSLv3   Kx=DH       Au=None  Enc=Camellia(256)          Mac=SHA1
+          0xC0,0x18 - AECDH-AES128-SHA               TLSv1   Kx=ECDH     Au=None  Enc=AES(128)               Mac=SHA1
+          0x00,0x34 - ADH-AES128-SHA                 SSLv3   Kx=DH       Au=None  Enc=AES(128)               Mac=SHA1
+          0x00,0x46 - ADH-CAMELLIA128-SHA            SSLv3   Kx=DH       Au=None  Enc=Camellia(128)          Mac=SHA1
+          0xC0,0x15 - AECDH-NULL-SHA                 TLSv1   Kx=ECDH     Au=None  Enc=None                   Mac=SHA1
+   ```
+
+* Lastly, `!MD5`, don't include any ciphers that use MD5 hashing algorithms. These are:  
+  ```
+  > openssl ciphers -V 'MD5'  
+          0x13,0x02 - TLS_AES_256_GCM_SHA384         TLSv1.3 Kx=any      Au=any   Enc=AESGCM(256)            Mac=AEAD
+          0x13,0x03 - TLS_CHACHA20_POLY1305_SHA256   TLSv1.3 Kx=any      Au=any   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0x13,0x01 - TLS_AES_128_GCM_SHA256         TLSv1.3 Kx=any      Au=any   Enc=AESGCM(128)            Mac=AEAD
+          0x00,0x01 - NULL-MD5                       SSLv3   Kx=RSA      Au=RSA   Enc=None                   Mac=MD5 
+  ```
+
+
+Combining these three options together you get a list of:  
+```
+> openssl ciphers -V 'HIGH:!aNULL:!MD5'
+          0x13,0x02 - TLS_AES_256_GCM_SHA384         TLSv1.3 Kx=any      Au=any   Enc=AESGCM(256)            Mac=AEAD
+          0x13,0x03 - TLS_CHACHA20_POLY1305_SHA256   TLSv1.3 Kx=any      Au=any   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0x13,0x01 - TLS_AES_128_GCM_SHA256         TLSv1.3 Kx=any      Au=any   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0x2C - ECDHE-ECDSA-AES256-GCM-SHA384  TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AESGCM(256)            Mac=AEAD
+          0xC0,0x30 - ECDHE-RSA-AES256-GCM-SHA384    TLSv1.2 Kx=ECDH     Au=RSA   Enc=AESGCM(256)            Mac=AEAD
+          0x00,0xA3 - DHE-DSS-AES256-GCM-SHA384      TLSv1.2 Kx=DH       Au=DSS   Enc=AESGCM(256)            Mac=AEAD
+          0x00,0x9F - DHE-RSA-AES256-GCM-SHA384      TLSv1.2 Kx=DH       Au=RSA   Enc=AESGCM(256)            Mac=AEAD
+          0xCC,0xA9 - ECDHE-ECDSA-CHACHA20-POLY1305  TLSv1.2 Kx=ECDH     Au=ECDSA Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xCC,0xA8 - ECDHE-RSA-CHACHA20-POLY1305    TLSv1.2 Kx=ECDH     Au=RSA   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xCC,0xAA - DHE-RSA-CHACHA20-POLY1305      TLSv1.2 Kx=DH       Au=RSA   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xC0,0xAD - ECDHE-ECDSA-AES256-CCM         TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x9F - DHE-RSA-AES256-CCM             TLSv1.2 Kx=DH       Au=RSA   Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x5D - ECDHE-ECDSA-ARIA256-GCM-SHA384 TLSv1.2 Kx=ECDH     Au=ECDSA Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x61 - ECDHE-ARIA256-GCM-SHA384       TLSv1.2 Kx=ECDH     Au=RSA   Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x57 - DHE-DSS-ARIA256-GCM-SHA384     TLSv1.2 Kx=DH       Au=DSS   Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x53 - DHE-RSA-ARIA256-GCM-SHA384     TLSv1.2 Kx=DH       Au=RSA   Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x2B - ECDHE-ECDSA-AES128-GCM-SHA256  TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0x2F - ECDHE-RSA-AES128-GCM-SHA256    TLSv1.2 Kx=ECDH     Au=RSA   Enc=AESGCM(128)            Mac=AEAD
+          0x00,0xA2 - DHE-DSS-AES128-GCM-SHA256      TLSv1.2 Kx=DH       Au=DSS   Enc=AESGCM(128)            Mac=AEAD
+          0x00,0x9E - DHE-RSA-AES128-GCM-SHA256      TLSv1.2 Kx=DH       Au=RSA   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0xAC - ECDHE-ECDSA-AES128-CCM         TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x9E - DHE-RSA-AES128-CCM             TLSv1.2 Kx=DH       Au=RSA   Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x5C - ECDHE-ECDSA-ARIA128-GCM-SHA256 TLSv1.2 Kx=ECDH     Au=ECDSA Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x60 - ECDHE-ARIA128-GCM-SHA256       TLSv1.2 Kx=ECDH     Au=RSA   Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x56 - DHE-DSS-ARIA128-GCM-SHA256     TLSv1.2 Kx=DH       Au=DSS   Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x52 - DHE-RSA-ARIA128-GCM-SHA256     TLSv1.2 Kx=DH       Au=RSA   Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x24 - ECDHE-ECDSA-AES256-SHA384      TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AES(256)               Mac=SHA384
+          0xC0,0x28 - ECDHE-RSA-AES256-SHA384        TLSv1.2 Kx=ECDH     Au=RSA   Enc=AES(256)               Mac=SHA384
+          0x00,0x6B - DHE-RSA-AES256-SHA256          TLSv1.2 Kx=DH       Au=RSA   Enc=AES(256)               Mac=SHA256
+          0x00,0x6A - DHE-DSS-AES256-SHA256          TLSv1.2 Kx=DH       Au=DSS   Enc=AES(256)               Mac=SHA256
+          0xC0,0x73 - ECDHE-ECDSA-CAMELLIA256-SHA384 TLSv1.2 Kx=ECDH     Au=ECDSA Enc=Camellia(256)          Mac=SHA384
+          0xC0,0x77 - ECDHE-RSA-CAMELLIA256-SHA384   TLSv1.2 Kx=ECDH     Au=RSA   Enc=Camellia(256)          Mac=SHA384
+          0x00,0xC4 - DHE-RSA-CAMELLIA256-SHA256     TLSv1.2 Kx=DH       Au=RSA   Enc=Camellia(256)          Mac=SHA256
+          0x00,0xC3 - DHE-DSS-CAMELLIA256-SHA256     TLSv1.2 Kx=DH       Au=DSS   Enc=Camellia(256)          Mac=SHA256
+          0xC0,0x23 - ECDHE-ECDSA-AES128-SHA256      TLSv1.2 Kx=ECDH     Au=ECDSA Enc=AES(128)               Mac=SHA256
+          0xC0,0x27 - ECDHE-RSA-AES128-SHA256        TLSv1.2 Kx=ECDH     Au=RSA   Enc=AES(128)               Mac=SHA256
+          0x00,0x67 - DHE-RSA-AES128-SHA256          TLSv1.2 Kx=DH       Au=RSA   Enc=AES(128)               Mac=SHA256
+          0x00,0x40 - DHE-DSS-AES128-SHA256          TLSv1.2 Kx=DH       Au=DSS   Enc=AES(128)               Mac=SHA256
+          0xC0,0x72 - ECDHE-ECDSA-CAMELLIA128-SHA256 TLSv1.2 Kx=ECDH     Au=ECDSA Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x76 - ECDHE-RSA-CAMELLIA128-SHA256   TLSv1.2 Kx=ECDH     Au=RSA   Enc=Camellia(128)          Mac=SHA256
+          0x00,0xBE - DHE-RSA-CAMELLIA128-SHA256     TLSv1.2 Kx=DH       Au=RSA   Enc=Camellia(128)          Mac=SHA256
+          0x00,0xBD - DHE-DSS-CAMELLIA128-SHA256     TLSv1.2 Kx=DH       Au=DSS   Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x0A - ECDHE-ECDSA-AES256-SHA         TLSv1   Kx=ECDH     Au=ECDSA Enc=AES(256)               Mac=SHA1
+          0xC0,0x14 - ECDHE-RSA-AES256-SHA           TLSv1   Kx=ECDH     Au=RSA   Enc=AES(256)               Mac=SHA1
+          0x00,0x39 - DHE-RSA-AES256-SHA             SSLv3   Kx=DH       Au=RSA   Enc=AES(256)               Mac=SHA1
+          0x00,0x38 - DHE-DSS-AES256-SHA             SSLv3   Kx=DH       Au=DSS   Enc=AES(256)               Mac=SHA1
+          0x00,0x88 - DHE-RSA-CAMELLIA256-SHA        SSLv3   Kx=DH       Au=RSA   Enc=Camellia(256)          Mac=SHA1
+          0x00,0x87 - DHE-DSS-CAMELLIA256-SHA        SSLv3   Kx=DH       Au=DSS   Enc=Camellia(256)          Mac=SHA1
+          0xC0,0x09 - ECDHE-ECDSA-AES128-SHA         TLSv1   Kx=ECDH     Au=ECDSA Enc=AES(128)               Mac=SHA1
+          0xC0,0x13 - ECDHE-RSA-AES128-SHA           TLSv1   Kx=ECDH     Au=RSA   Enc=AES(128)               Mac=SHA1
+          0x00,0x33 - DHE-RSA-AES128-SHA             SSLv3   Kx=DH       Au=RSA   Enc=AES(128)               Mac=SHA1
+          0x00,0x32 - DHE-DSS-AES128-SHA             SSLv3   Kx=DH       Au=DSS   Enc=AES(128)               Mac=SHA1
+          0x00,0x45 - DHE-RSA-CAMELLIA128-SHA        SSLv3   Kx=DH       Au=RSA   Enc=Camellia(128)          Mac=SHA1
+          0x00,0x44 - DHE-DSS-CAMELLIA128-SHA        SSLv3   Kx=DH       Au=DSS   Enc=Camellia(128)          Mac=SHA1
+          0x00,0xAD - RSA-PSK-AES256-GCM-SHA384      TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=AESGCM(256)            Mac=AEAD
+          0x00,0xAB - DHE-PSK-AES256-GCM-SHA384      TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=AESGCM(256)            Mac=AEAD
+          0xCC,0xAE - RSA-PSK-CHACHA20-POLY1305      TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xCC,0xAD - DHE-PSK-CHACHA20-POLY1305      TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xCC,0xAC - ECDHE-PSK-CHACHA20-POLY1305    TLSv1.2 Kx=ECDHEPSK Au=PSK   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xC0,0xA7 - DHE-PSK-AES256-CCM             TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x6F - RSA-PSK-ARIA256-GCM-SHA384     TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=ARIAGCM(256)           Mac=AEAD
+          0xC0,0x6D - DHE-PSK-ARIA256-GCM-SHA384     TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=ARIAGCM(256)           Mac=AEAD
+          0x00,0x9D - AES256-GCM-SHA384              TLSv1.2 Kx=RSA      Au=RSA   Enc=AESGCM(256)            Mac=AEAD
+          0xC0,0x9D - AES256-CCM                     TLSv1.2 Kx=RSA      Au=RSA   Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x51 - ARIA256-GCM-SHA384             TLSv1.2 Kx=RSA      Au=RSA   Enc=ARIAGCM(256)           Mac=AEAD
+          0x00,0xA9 - PSK-AES256-GCM-SHA384          TLSv1.2 Kx=PSK      Au=PSK   Enc=AESGCM(256)            Mac=AEAD
+          0xCC,0xAB - PSK-CHACHA20-POLY1305          TLSv1.2 Kx=PSK      Au=PSK   Enc=CHACHA20/POLY1305(256) Mac=AEAD
+          0xC0,0xA5 - PSK-AES256-CCM                 TLSv1.2 Kx=PSK      Au=PSK   Enc=AESCCM(256)            Mac=AEAD
+          0xC0,0x6B - PSK-ARIA256-GCM-SHA384         TLSv1.2 Kx=PSK      Au=PSK   Enc=ARIAGCM(256)           Mac=AEAD
+          0x00,0xAC - RSA-PSK-AES128-GCM-SHA256      TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=AESGCM(128)            Mac=AEAD
+          0x00,0xAA - DHE-PSK-AES128-GCM-SHA256      TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0xA6 - DHE-PSK-AES128-CCM             TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x6E - RSA-PSK-ARIA128-GCM-SHA256     TLSv1.2 Kx=RSAPSK   Au=RSA   Enc=ARIAGCM(128)           Mac=AEAD
+          0xC0,0x6C - DHE-PSK-ARIA128-GCM-SHA256     TLSv1.2 Kx=DHEPSK   Au=PSK   Enc=ARIAGCM(128)           Mac=AEAD
+          0x00,0x9C - AES128-GCM-SHA256              TLSv1.2 Kx=RSA      Au=RSA   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0x9C - AES128-CCM                     TLSv1.2 Kx=RSA      Au=RSA   Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x50 - ARIA128-GCM-SHA256             TLSv1.2 Kx=RSA      Au=RSA   Enc=ARIAGCM(128)           Mac=AEAD
+          0x00,0xA8 - PSK-AES128-GCM-SHA256          TLSv1.2 Kx=PSK      Au=PSK   Enc=AESGCM(128)            Mac=AEAD
+          0xC0,0xA4 - PSK-AES128-CCM                 TLSv1.2 Kx=PSK      Au=PSK   Enc=AESCCM(128)            Mac=AEAD
+          0xC0,0x6A - PSK-ARIA128-GCM-SHA256         TLSv1.2 Kx=PSK      Au=PSK   Enc=ARIAGCM(128)           Mac=AEAD
+          0x00,0x3D - AES256-SHA256                  TLSv1.2 Kx=RSA      Au=RSA   Enc=AES(256)               Mac=SHA256
+          0x00,0xC0 - CAMELLIA256-SHA256             TLSv1.2 Kx=RSA      Au=RSA   Enc=Camellia(256)          Mac=SHA256
+          0x00,0x3C - AES128-SHA256                  TLSv1.2 Kx=RSA      Au=RSA   Enc=AES(128)               Mac=SHA256
+          0x00,0xBA - CAMELLIA128-SHA256             TLSv1.2 Kx=RSA      Au=RSA   Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x38 - ECDHE-PSK-AES256-CBC-SHA384    TLSv1   Kx=ECDHEPSK Au=PSK   Enc=AES(256)               Mac=SHA384
+          0xC0,0x36 - ECDHE-PSK-AES256-CBC-SHA       TLSv1   Kx=ECDHEPSK Au=PSK   Enc=AES(256)               Mac=SHA1
+          0xC0,0x22 - SRP-DSS-AES-256-CBC-SHA        SSLv3   Kx=SRP      Au=DSS   Enc=AES(256)               Mac=SHA1
+          0xC0,0x21 - SRP-RSA-AES-256-CBC-SHA        SSLv3   Kx=SRP      Au=RSA   Enc=AES(256)               Mac=SHA1
+          0xC0,0x20 - SRP-AES-256-CBC-SHA            SSLv3   Kx=SRP      Au=SRP   Enc=AES(256)               Mac=SHA1
+          0x00,0xB7 - RSA-PSK-AES256-CBC-SHA384      TLSv1   Kx=RSAPSK   Au=RSA   Enc=AES(256)               Mac=SHA384
+          0x00,0xB3 - DHE-PSK-AES256-CBC-SHA384      TLSv1   Kx=DHEPSK   Au=PSK   Enc=AES(256)               Mac=SHA384
+          0x00,0x95 - RSA-PSK-AES256-CBC-SHA         SSLv3   Kx=RSAPSK   Au=RSA   Enc=AES(256)               Mac=SHA1
+          0x00,0x91 - DHE-PSK-AES256-CBC-SHA         SSLv3   Kx=DHEPSK   Au=PSK   Enc=AES(256)               Mac=SHA1
+          0xC0,0x9B - ECDHE-PSK-CAMELLIA256-SHA384   TLSv1   Kx=ECDHEPSK Au=PSK   Enc=Camellia(256)          Mac=SHA384
+          0xC0,0x99 - RSA-PSK-CAMELLIA256-SHA384     TLSv1   Kx=RSAPSK   Au=RSA   Enc=Camellia(256)          Mac=SHA384
+          0xC0,0x97 - DHE-PSK-CAMELLIA256-SHA384     TLSv1   Kx=DHEPSK   Au=PSK   Enc=Camellia(256)          Mac=SHA384
+          0x00,0x35 - AES256-SHA                     SSLv3   Kx=RSA      Au=RSA   Enc=AES(256)               Mac=SHA1
+          0x00,0x84 - CAMELLIA256-SHA                SSLv3   Kx=RSA      Au=RSA   Enc=Camellia(256)          Mac=SHA1
+          0x00,0xAF - PSK-AES256-CBC-SHA384          TLSv1   Kx=PSK      Au=PSK   Enc=AES(256)               Mac=SHA384
+          0x00,0x8D - PSK-AES256-CBC-SHA             SSLv3   Kx=PSK      Au=PSK   Enc=AES(256)               Mac=SHA1
+          0xC0,0x95 - PSK-CAMELLIA256-SHA384         TLSv1   Kx=PSK      Au=PSK   Enc=Camellia(256)          Mac=SHA384
+          0xC0,0x37 - ECDHE-PSK-AES128-CBC-SHA256    TLSv1   Kx=ECDHEPSK Au=PSK   Enc=AES(128)               Mac=SHA256
+          0xC0,0x35 - ECDHE-PSK-AES128-CBC-SHA       TLSv1   Kx=ECDHEPSK Au=PSK   Enc=AES(128)               Mac=SHA1
+          0xC0,0x1F - SRP-DSS-AES-128-CBC-SHA        SSLv3   Kx=SRP      Au=DSS   Enc=AES(128)               Mac=SHA1
+          0xC0,0x1E - SRP-RSA-AES-128-CBC-SHA        SSLv3   Kx=SRP      Au=RSA   Enc=AES(128)               Mac=SHA1
+          0xC0,0x1D - SRP-AES-128-CBC-SHA            SSLv3   Kx=SRP      Au=SRP   Enc=AES(128)               Mac=SHA1
+          0x00,0xB6 - RSA-PSK-AES128-CBC-SHA256      TLSv1   Kx=RSAPSK   Au=RSA   Enc=AES(128)               Mac=SHA256
+          0x00,0xB2 - DHE-PSK-AES128-CBC-SHA256      TLSv1   Kx=DHEPSK   Au=PSK   Enc=AES(128)               Mac=SHA256
+          0x00,0x94 - RSA-PSK-AES128-CBC-SHA         SSLv3   Kx=RSAPSK   Au=RSA   Enc=AES(128)               Mac=SHA1
+          0x00,0x90 - DHE-PSK-AES128-CBC-SHA         SSLv3   Kx=DHEPSK   Au=PSK   Enc=AES(128)               Mac=SHA1
+          0xC0,0x9A - ECDHE-PSK-CAMELLIA128-SHA256   TLSv1   Kx=ECDHEPSK Au=PSK   Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x98 - RSA-PSK-CAMELLIA128-SHA256     TLSv1   Kx=RSAPSK   Au=RSA   Enc=Camellia(128)          Mac=SHA256
+          0xC0,0x96 - DHE-PSK-CAMELLIA128-SHA256     TLSv1   Kx=DHEPSK   Au=PSK   Enc=Camellia(128)          Mac=SHA256
+          0x00,0x2F - AES128-SHA                     SSLv3   Kx=RSA      Au=RSA   Enc=AES(128)               Mac=SHA1
+          0x00,0x41 - CAMELLIA128-SHA                SSLv3   Kx=RSA      Au=RSA   Enc=Camellia(128)          Mac=SHA1
+          0x00,0xAE - PSK-AES128-CBC-SHA256          TLSv1   Kx=PSK      Au=PSK   Enc=AES(128)               Mac=SHA256
+          0x00,0x8C - PSK-AES128-CBC-SHA             SSLv3   Kx=PSK      Au=PSK   Enc=AES(128)               Mac=SHA1
+          0xC0,0x94 - PSK-CAMELLIA128-SHA256         TLSv1   Kx=PSK      Au=PSK   Enc=Camellia(128)          Mac=SHA256
+```
+
+## More NGINX Configuration
+I still have some more NGINX configuration to do. And there is bunch of them. Before I create YAML files for deployment.
+
+## HTTP Connection Upgrade for communication to/from ASP.NET Core
+The thing I need to do is upgrade the connection to HTTP 2.0 when the API call being reversed proxied back. Currently, when the `weatherforecast` endpoint is called, it is using HTTP 1.1 as per the output of the logs.  
+```
+2026-04-11 15:58:03.343 | 2026-04-11 05:58:03 [INF] Application is shutting down...
+2026-04-11 15:58:03.654 | 2026-04-11 05:58:03 [INF] Application started! Logging to both console and/or file.
+2026-04-11 15:58:03.664 | 2026-04-11 05:58:03 [INF] ForwardedHeaders config — Headers: XForwardedFor, XForwardedProto, KnownProxies: 10.0.0.2
+2026-04-11 15:58:03.707 | 2026-04-11 05:58:03 [WRN] Overriding HTTP_PORTS '8080' and HTTPS_PORTS ''. Binding to values defined by URLS instead 'https://+:5229'.
+2026-04-11 15:58:03.833 | 2026-04-11 05:58:03 [INF] Now listening on: https://[::]:5229
+2026-04-11 15:58:03.833 | 2026-04-11 05:58:03 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-11 15:58:03.833 | 2026-04-11 05:58:03 [INF] Hosting environment: Staging
+2026-04-11 15:58:03.833 | 2026-04-11 05:58:03 [INF] Content root path: /app
+2026-04-11 15:58:06.053 | 2026-04-11 05:58:06 [INF] Request starting HTTP/1.1 GET https://localhost/weatherforecast - null null              <--- 👀👀👀👀 HERE
+2026-04-11 15:58:06.068 | 2026-04-11 05:58:06 [INF] Request:
+2026-04-11 15:58:06.068 | Protocol: HTTP/1.1                                                  <--- 👀👀👀👀 HERE
+2026-04-11 15:58:06.068 | Method: GET
+2026-04-11 15:58:06.068 | Scheme: https
+2026-04-11 15:58:06.068 | PathBase: 
+2026-04-11 15:58:06.068 | Path: /weatherforecast
+2026-04-11 15:58:06.068 | Accept: */*
+2026-04-11 15:58:06.068 | Host: localhost
+2026-04-11 15:58:06.068 | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36
+2026-04-11 15:58:06.068 | Accept-Encoding: gzip, deflate, br, zstd
+2026-04-11 15:58:06.068 | Accept-Language: en-GB,en-US;q=0.9,en;q=0.8
+2026-04-11 15:58:06.068 | Cache-Control: no-cache
+2026-04-11 15:58:06.068 | Pragma: [Redacted]
+2026-04-11 15:58:06.068 | Referer: https://localhost/
+2026-04-11 15:58:06.068 | X-Original-Proto: https
+2026-04-11 15:58:06.068 | sec-ch-ua-platform: "macOS"
+2026-04-11 15:58:06.068 | sec-ch-ua: "Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"
+2026-04-11 15:58:06.068 | sec-ch-ua-mobile: ?0
+2026-04-11 15:58:06.068 | sec-fetch-site: same-origin
+2026-04-11 15:58:06.068 | sec-fetch-mode: cors
+2026-04-11 15:58:06.068 | sec-fetch-dest: empty
+2026-04-11 15:58:06.068 | priority: u=1, i
+2026-04-11 15:58:06.068 | X-Original-For: [::ffff:10.0.0.2]:55912
+2026-04-11 15:58:06.069 | 2026-04-11 05:58:06 [INF] Executing endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-04-11 15:58:06.081 | 2026-04-11 05:58:06 [INF] Route matched with {action = "Get", controller = "WeatherForecast"}. Executing controller action with signature System.Collections.Generic.IEnumerable`1[HospitalProject.Server.WeatherForecast] Get() on controller HospitalProject.Server.Controllers.WeatherForecastController (HospitalProject.Server).
+2026-04-11 15:58:06.084 | 2026-04-11 05:58:06 [INF] Executing ObjectResult, writing value of type 'HospitalProject.Server.WeatherForecast[]'.
+2026-04-11 15:58:06.096 | 2026-04-11 05:58:06 [INF] Response:
+2026-04-11 15:58:06.096 | StatusCode: 200
+2026-04-11 15:58:06.096 | Content-Type: application/json; charset=utf-8
+2026-04-11 15:58:06.102 | 2026-04-11 05:58:06 [INF] Executed action HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server) in 18.2892ms
+2026-04-11 15:58:06.102 | 2026-04-11 05:58:06 [INF] Executed endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-04-11 15:58:06.103 | 2026-04-11 05:58:06 [INF] ResponseBody: [{"date":"2026-04-12","temperatureC":45,"temperatureF":112,"summary":"Freezing"},{"date":"2026-04-13","temperatureC":22,"temperatureF":71,"summary":"Cool"},{"date":"2026-04-14","temperatureC":48,"temperatureF":118,"summary":"Cool"},{"date":"2026-04-15","temperatureC":23,"temperatureF":73,"summary":"Freezing"},{"date":"2026-04-16","temperatureC":43,"temperatureF":109,"summary":"Sweltering"}]
+2026-04-11 15:58:06.105 | 2026-04-11 05:58:06 [INF] Duration: 36.4ms
+2026-04-11 15:58:06.107 | 2026-04-11 05:58:06 [INF] HTTP GET /weatherforecast responded 200 in 40.0728 ms
+2026-04-11 15:58:06.109 | 2026-04-11 05:58:06 [INF] Request finished HTTP/1.1 GET https://localhost/weatherforecast - 200 null application/json; charset=utf-8 58.1173ms <--- 👀👀👀👀 HERE
+```
+
+All I have done is added one line in [staging.nginx.conf](../HospitalProject.Client/staging.nginx.conf).  
+```
+...
+            proxy_http_version                  2;
+...
+```
+
+Now the output from the ASP.NET Core logs shows the connection is HTTP 2.  
+```
+2026-04-11 16:19:37.991 | 2026-04-11 06:19:37 [INF] Application is shutting down...
+2026-04-11 16:19:38.343 | 2026-04-11 06:19:38 [INF] Application started! Logging to both console and/or file.
+2026-04-11 16:19:38.360 | 2026-04-11 06:19:38 [INF] ForwardedHeaders config — Headers: XForwardedFor, XForwardedProto, KnownProxies: 10.0.0.2
+2026-04-11 16:19:38.408 | 2026-04-11 06:19:38 [WRN] Overriding HTTP_PORTS '8080' and HTTPS_PORTS ''. Binding to values defined by URLS instead 'https://+:5229'.
+2026-04-11 16:19:38.525 | 2026-04-11 06:19:38 [INF] Now listening on: https://[::]:5229
+2026-04-11 16:19:38.525 | 2026-04-11 06:19:38 [INF] Application started. Press Ctrl+C to shut down.
+2026-04-11 16:19:38.525 | 2026-04-11 06:19:38 [INF] Hosting environment: Staging
+2026-04-11 16:19:38.525 | 2026-04-11 06:19:38 [INF] Content root path: /app
+2026-04-11 16:20:32.898 | 2026-04-11 06:20:32 [INF] Request starting HTTP/2 GET https://localhost/weatherforecast - null null                <--- 👀👀👀👀 HERE
+2026-04-11 16:20:32.912 | 2026-04-11 06:20:32 [INF] Request:
+2026-04-11 16:20:32.912 | Protocol: HTTP/2                                                                                                   <--- 👀👀👀👀 HERE
+2026-04-11 16:20:32.912 | Method: GET
+2026-04-11 16:20:32.912 | Scheme: https
+2026-04-11 16:20:32.912 | PathBase: 
+2026-04-11 16:20:32.912 | Path: /weatherforecast
+2026-04-11 16:20:32.912 | Accept: */*
+2026-04-11 16:20:32.912 | Host: localhost
+2026-04-11 16:20:32.912 | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36
+2026-04-11 16:20:32.912 | Accept-Encoding: gzip, deflate, br, zstd
+2026-04-11 16:20:32.912 | Accept-Language: en-GB,en-US;q=0.9,en;q=0.8
+2026-04-11 16:20:32.912 | Cache-Control: no-cache
+2026-04-11 16:20:32.912 | Pragma: [Redacted]
+2026-04-11 16:20:32.912 | Referer: https://localhost/
+2026-04-11 16:20:32.912 | X-Original-Proto: https
+2026-04-11 16:20:32.912 | sec-ch-ua-platform: "macOS"
+2026-04-11 16:20:32.912 | sec-ch-ua: "Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"
+2026-04-11 16:20:32.912 | sec-ch-ua-mobile: ?0
+2026-04-11 16:20:32.912 | sec-fetch-site: same-origin
+2026-04-11 16:20:32.912 | sec-fetch-mode: cors
+2026-04-11 16:20:32.912 | sec-fetch-dest: empty
+2026-04-11 16:20:32.912 | priority: u=1, i
+2026-04-11 16:20:32.912 | X-Original-For: [::ffff:10.0.0.2]:34728
+2026-04-11 16:20:32.913 | 2026-04-11 06:20:32 [INF] Executing endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-04-11 16:20:32.924 | 2026-04-11 06:20:32 [INF] Route matched with {action = "Get", controller = "WeatherForecast"}. Executing controller action with signature System.Collections.Generic.IEnumerable`1[HospitalProject.Server.WeatherForecast] Get() on controller HospitalProject.Server.Controllers.WeatherForecastController (HospitalProject.Server).
+2026-04-11 16:20:32.927 | 2026-04-11 06:20:32 [INF] Executing ObjectResult, writing value of type 'HospitalProject.Server.WeatherForecast[]'.
+2026-04-11 16:20:32.938 | 2026-04-11 06:20:32 [INF] Response:
+2026-04-11 16:20:32.938 | StatusCode: 200
+2026-04-11 16:20:32.938 | Content-Type: application/json; charset=utf-8
+2026-04-11 16:20:32.941 | 2026-04-11 06:20:32 [INF] Executed action HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server) in 14.8505ms
+2026-04-11 16:20:32.941 | 2026-04-11 06:20:32 [INF] Executed endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-04-11 16:20:32.942 | 2026-04-11 06:20:32 [INF] ResponseBody: [{"date":"2026-04-12","temperatureC":-19,"temperatureF":-2,"summary":"Hot"},{"date":"2026-04-13","temperatureC":2,"temperatureF":35,"summary":"Scorching"},{"date":"2026-04-14","temperatureC":8,"temperatureF":46,"summary":"Freezing"},{"date":"2026-04-15","temperatureC":-4,"temperatureF":25,"summary":"Cool"},{"date":"2026-04-16","temperatureC":15,"temperatureF":58,"summary":"Cool"}]
+2026-04-11 16:20:32.943 | 2026-04-11 06:20:32 [INF] Duration: 31.2729ms
+2026-04-11 16:20:32.945 | 2026-04-11 06:20:32 [INF] HTTP GET /weatherforecast responded 200 in 34.3721 ms
+2026-04-11 16:20:32.947 | 2026-04-11 06:20:32 [INF] Request finished HTTP/2 GET https://localhost/weatherforecast - 200 null application/json; charset=utf-8 50.0063ms             <--- 👀👀👀👀 HERE
+```
+
+And to verify that Application-Layer Protocol Negotiation (APLN) is being done. I'm going to use OpenSSL to check. 
+
+## Adding Additional Security Headers
+A good thing about setting NGINX as a reverse proxy (at the moment), no CORS is required to be setup. This is because the browser does not see two API calls being one meaning an API call for the frontend URL and another API call with a different URL for the backend. This also means that the browser does not request a pre flight check (it shouldn't now if I did not use a reverse proxy, only when I have the authentication middleware added in ASP.NET Core). Everything is one source hence the browser will put the header for `Sec-Fetch-Site` as `same-origin` and `Referrer Policy` as
+`strict-origin-when-cross-origin`. This is currently the response from the server when the page is loaded:  
+![Response Headers from NGINX](./images/Screenshot%202026-04-11%20at%204.48.54 pm.png)
+
+But I am going to put some more security headers.
+```
+...
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=604800" always;
+...
+```
+
 
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
 * [Dockerfile reference | Docker Docs](https://docs.docker.com/reference/dockerfile/)
@@ -2047,3 +2534,7 @@ DONE
 * [TLS Cipher Suites in Windows Server 2022 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthn/tls-cipher-suites-in-windows-server-2022)
 * [openssl s_client commands and examples - Mister PKI](https://www.misterpki.com/openssl-s-client/)
 * [openssl-s_client - OpenSSL Documentation](https://docs.openssl.org/3.0/man1/openssl-s_client/)
+* [network - How do I read the output of dns-sd? - Ask Different](https://apple.stackexchange.com/questions/115674/how-do-i-read-the-output-of-dns-sd)
+* [apache - SSLCipherSuite aliases - Stack Overflow](https://stackoverflow.com/questions/28737374/sslciphersuite-aliases)
+* [Configuring HTTPS servers](https://nginx.org/en/docs/http/configuring_https_servers.html)
+* [NGINX SSL Termination | NGINX Documentation](https://docs.nginx.com/nginx/admin-guide/security-controls/terminating-ssl-http/)

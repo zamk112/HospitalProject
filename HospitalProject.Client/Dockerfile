@@ -1,5 +1,5 @@
 ARG NODE_VERSION=current-alpine
-ARG NGINX_VERSION=stable-alpine
+ARG NGINX_VERSION=mainline-alpine
 
 FROM node:${NODE_VERSION} AS builder
 WORKDIR /app

@@ -25,6 +25,12 @@ public static class KestrelConfigurationExtensions
 
                 httpsOptions.OnAuthenticate = (connectionContext, sslOptions) =>
                 {
+                    sslOptions.ApplicationProtocols = new List<SslApplicationProtocol>
+                    {
+                        SslApplicationProtocol.Http2,
+                        SslApplicationProtocol.Http11
+                    };
+
                     if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                     {
                         sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(new[]

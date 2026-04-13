@@ -11,6 +11,6 @@ RUN npm run build
 FROM nginx:${NGINX_VERSION} AS runner
 COPY --chown=nginx:nginx --from=builder /app/dist /usr/share/nginx/html
 USER nginx
-EXPOSE 443
+EXPOSE 80 443
 ENTRYPOINT ["nginx", "-c", "/etc/nginx/nginx.conf"]
 CMD ["-g", "daemon off;"]

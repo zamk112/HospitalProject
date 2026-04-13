@@ -10,7 +10,6 @@ public static class KestrelConfigurationExtensions
     public static IWebHostBuilder ConfigureKestrelHttpsDefaults (this IWebHostBuilder webHostBuilder, IWebHostEnvironment hostEnvironment)
     {
 
-        
         webHostBuilder.ConfigureKestrel((context, serverOptions) =>
         {
             serverOptions.ConfigureHttpsDefaults(httpsOptions =>
@@ -25,16 +24,16 @@ public static class KestrelConfigurationExtensions
 
                 httpsOptions.OnAuthenticate = (connectionContext, sslOptions) =>
                 {
-                    sslOptions.ApplicationProtocols = new List<SslApplicationProtocol>
-                    {
+                    sslOptions.ApplicationProtocols =
+                    [
                         SslApplicationProtocol.Http2,
                         SslApplicationProtocol.Http11
-                    };
+                    ];
 
                     if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                     {
-                        sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(new[]
-                        {
+                        sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(
+                        [
                             // TLS 1.3 cipher suites
                             TlsCipherSuite.TLS_AES_256_GCM_SHA384,
                             TlsCipherSuite.TLS_AES_128_GCM_SHA256,
@@ -42,8 +41,9 @@ public static class KestrelConfigurationExtensions
                             
                             // TLS 1.2 cipher suites
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-                        }); 
+                        ]); 
                     }
                     sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
                     sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;

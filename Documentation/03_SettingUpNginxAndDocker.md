@@ -7,6 +7,8 @@ And since this is project is based on hospital CRM, end-to-end encryption needs 
 
 Before I start creating a Docker file for the backend, I need to add some and make changes code to the application and these changes are related for running the application on NGINX. 
 
+A good starting point document for NGINX that I found was [How To Deploy a React Application with Nginx on Ubuntu | DigitalOcean](https://www.digitalocean.com/community/tutorials/deploy-react-application-with-nginx-on-ubuntu). It really help out alot in terms of understanding how NGINX works.
+
 # Configuring and Adding Forward Headers 
 The first thing I need to do is to add the Forward Request middleware and the reason for adding the Forward Request middleware is that NGINX will forward the request to the ASP.NET Core/Kestrel backend. I've added the Forward Request middleware just after the intialising the `app` variable step.  
 

@@ -7,7 +7,7 @@ And since this is project is based on hospital CRM, end-to-end encryption needs 
 
 Before I start creating a Docker file for the backend, I need to add some and make changes code to the application and these changes are related for running the application on NGINX. 
 
-A good starting point document for NGINX that I found was [How To Deploy a React Application with Nginx on Ubuntu | DigitalOcean](https://www.digitalocean.com/community/tutorials/deploy-react-application-with-nginx-on-ubuntu). It really help out alot in terms of understanding how NGINX works.
+A good starting point document for NGINX that I found was [How To Deploy a React Application with Nginx on Ubuntu | DigitalOcean](https://www.digitalocean.com/community/tutorials/deploy-react-application-with-nginx-on-ubuntu). It really help out a lot in terms of understanding how NGINX works.
 
 # Configuring and Adding Forward Headers 
 The first thing I need to do is to add the Forward Request middleware and the reason for adding the Forward Request middleware is that NGINX will forward the request to the ASP.NET Core/Kestrel backend. I've added the Forward Request middleware just after the intialising the `app` variable step.  
@@ -2094,7 +2094,7 @@ DONE
 Now that I've done ASP.NET Core, now it is time for NGINX. In [staging.nginx.conf](../HospitalProject.Client/staging.nginx.conf). Although, I've added a few SSL configuration items, which are below.
 ```
 ...
-    server {
+    http {
         ...
         ssl_protocols               TLSv1.2 TLSv1.3;
         ssl_ciphers                 HIGH:!aNULL:!MD5:!kRSA:!kDHE:!DSS:!PSK:!SRP:!ARIA:!CAMELLIA:!AESCCM;
@@ -2107,7 +2107,7 @@ Now that I've done ASP.NET Core, now it is time for NGINX. In [staging.nginx.con
 ...
 ```
 
-These SSL directives are in the `server` block and they apply globally. The first line `ssl_protocols` directive specifies which TLS version that the server can use, which is TLS version 1.2 and version 1.3. And then the next one is `ssl_ciphers` with the value of `HIGH:!aNULL:!MD5:!kRSA:!kDHE:!DSS:!PSK:!SRP:!ARIA:!CAMELLIA:!AESCCM;`. To break down this string:  
+These SSL directives are in the `http` block and they apply globally. The first line `ssl_protocols` directive specifies which TLS version that the server can use, which is TLS version 1.2 and version 1.3. And then the next one is `ssl_ciphers` with the value of `HIGH:!aNULL:!MD5:!kRSA:!kDHE:!DSS:!PSK:!SRP:!ARIA:!CAMELLIA:!AESCCM;`. To break down this string:  
 * `HIGH` - any cipher suite that uses 128 bit encryption or higher. 
 * `!aNULL` - means disable cipher suites that are not used for authentication. This is for stopping Man-In-The-Middle (MITM) attacks. 
 * `!MD5` - don't include any ciphers that use MD5 hashing algorithms because they're weak. 
@@ -2274,8 +2274,8 @@ Now the output from the ASP.NET Core logs shows the connection is HTTP 2.
 
 And to verify that Application-Layer Protocol Negotiation (APLN) is being done. I'm going to use OpenSSL to check. 
 
-## Keep alive connections for ASP.NET Core Backend
-In order to make NGINX more performant and reduce the number of SSL/TLS handshakes, I've added the `upstream` with a `keepalive` value inside the `http` block.
+## keepalive Connection Cache
+In order to make NGINX more performant and reduce the number of SSL/TLS handshakes and making the session cache more effective, I've added the `upstream` with a `keepalive` value which caches the connections inside the `http` block.
 ```
 ...
     upstream hospitalproject_api {
@@ -2301,6 +2301,8 @@ But I also had to update the `proxy_pass` value to reference the upstream block 
 ...
 ```
 
+The `keepalive` directive will cache a connection then the multiplex streams over it. After the API calls are finish with serving it, the `keepalive` directive holds it in the cache pool for the next request. One thing to note is that is that you need to add a `Connection` header in the `/location` block for HTTP/1 and HTTP/1.1 protocols but it is not needed for HTTP/2.
+
 ## Adding Additional Security Headers
 A good thing about setting NGINX as a reverse proxy (at the moment), no CORS is required to be setup. This is because the browser does not see two API calls being one meaning an API call for the frontend URL and another API call with a different URL for the backend. This also means that the browser does not request a pre flight check (it shouldn't now if I did not use a reverse proxy, only when I have the authentication middleware added in ASP.NET Core). Everything is one source hence the browser will put the header for `Sec-Fetch-Site` as `same-origin` and `Referrer-Policy` as `strict-origin-when-cross-origin`. This is currently the response from the server when the page is loaded:  
 ![Response Headers from NGINX](./images/Screenshot%202026-04-11%20at%204.48.54 pm.png)
@@ -2313,7 +2315,6 @@ But I am going to put some more security headers.
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src: 'self';" always;
         add_header Strict-Transport-Security "max-age=604800" always;
-
 ...
 ```
 
@@ -2371,7 +2372,47 @@ EXPOSE 80 443
 ...
 ```
 
+## Gzip Compression
+The next thing I want to apply is Gzip compression which I added to the `http` block.
+```
+http {
+    ...
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_buffers 16 8k;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/xml+rss
+        application/json
+        image/svg+xml;
+    ...
+}
+```
 
+`gzip_comp_level` is set to 5 and since I'm using docker I'm more for speed at the moment than best compression (maybe I should do 6 but also taking into consideration that I'm also working on my MacBook Air). `gzip_min_length` is 1024, anything less than this value won't be compressed. `gzip_buffers` I set the number attribute to 16 buffers and size of 8 Kilobytes each. `gzip_types` I've defined that types that gzip compression should apply to. 
+
+With this current configuration the output from the weather forecast endpoint is compressed and this is not good, because it would lead to BREACH attacks since I am using HTTPS. And currently the weather forecast API call is being compressed.  
+![Weather forecast response being compressed](./images/Screenshot%202026-04-15%20at%203.51.31 pm.png)
+
+Which is what I don't want for text type responses from ASP.NET Core backend. What I have done is added `gzip off` in the `location` block for the weather forecast endpoint.  
+```
+...
+        location /weatherforecast {
+            gzip off;
+            proxy_pass https://hospitalproject_api;
+            ...
+        }
+...
+```
+
+Now everything else is compressed except for JSON responses from ASP.NET Core.  
+![weather forecast endpoint no longer compressed](./images/Screenshot%202026-04-15%20at%205.35.01 pm.png)
 
 # References {#references}
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
@@ -2427,3 +2468,10 @@ EXPOSE 80 443
 * [Content-Security-Policy (CSP) header - HTTP | MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy)
 * [Module ngx_http_headers_module](https://nginx.org/en/docs/http/ngx_http_headers_module.html)
 * [Redirect HTTP to HTTPS in Nginx | Linuxize](https://linuxize.com/post/redirect-http-to-https-in-nginx/)
+* [Module ngx_http_gzip_module](https://nginx.org/en/docs/http/ngx_http_gzip_module.html)
+* [What is Cache-Control and How HTTP Cache Headers Work | CDN Guide | Imperva](https://www.imperva.com/learn/performance/cache-control/)
+* [ETag header - HTTP | MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/ETag)
+* [Last-Modified header - HTTP | MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Last-Modified)
+* [Authorization header - HTTP | MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Authorization)
+* [Understanding HTTP Caching Headers: Cache-Control, ETag, Expires | HttpStatus.com](https://httpstatus.com/learn/understanding-http-caching-headers-cache-control-etag-expires)
+* [BREACH - Wikipedia](https://en.wikipedia.org/wiki/BREACH)

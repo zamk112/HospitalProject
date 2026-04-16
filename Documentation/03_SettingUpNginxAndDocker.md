@@ -1735,7 +1735,7 @@ public static class KestrelConfigurationExtensions
 }
 ```
 
-A few things, In `KestrelServerOptions.ConfigureHttpsDefaults()`, `httpsOptions.SslProtocols` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.SslProtocols`) basically allows what protocols that I want to use. Whereas `sslOptions.EnabledSslProtocols` (or `SslServerAuthenticationOptions.EnabledSslProtocols`) basically says what protocols can be matched when authentication occurs. And another thing as well `IWebHostBuilder.ConfigureKestrel()` & `KestrelServerOptions.ConfigureHttpsDefaults()` takes in `Action` delegates as parameters and to me this basically means, these will get executed when ASP.NET Core is launched and at least for `ConfigureHttpsDefaults()` each time a HTTPS endpoint is created as per [Configure endpoints for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0#configure-https). 
+A few things, in `KestrelServerOptions.ConfigureHttpsDefaults()`, `httpsOptions.SslProtocols` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.SslProtocols`) basically allows what protocols that I want to use. Whereas `sslOptions.EnabledSslProtocols` (or `SslServerAuthenticationOptions.EnabledSslProtocols`) basically says what protocols can be matched when authentication occurs. And another thing as well `IWebHostBuilder.ConfigureKestrel()` & `KestrelServerOptions.ConfigureHttpsDefaults()` takes in `Action` delegates as parameters and to me this basically means, these will get executed when ASP.NET Core is launched and at least for `ConfigureHttpsDefaults()` each time a HTTPS endpoint is created as per [Configure endpoints for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0#configure-https). 
 
 However, with `httpsOptions.OnAuthenticate` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.OnAuthenticate`) is a variable where you assign a `Action` delegate function and it is used each time for authentication. And `sslOptions.EncryptionPolicy` (or `SslServerAuthenticationOptions.EncryptionPolicy`) and I've chosen particular cipher suites for both TLS version 1.2 and version 1.3 that supports AES encryption (since all my certificates has been encrypted with AES256). And the cipher suite is mostly based off the [TLS Cipher Suites in Windows Server 2022 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthn/tls-cipher-suites-in-windows-server-2022) in terms of order and preference.
 
@@ -2378,7 +2378,6 @@ The next thing I want to apply is Gzip compression which I added to the `http` b
 http {
     ...
     gzip on;
-    gzip_vary on;
     gzip_comp_level 5;
     gzip_min_length 1024;
     gzip_buffers 16 8k;
@@ -2413,6 +2412,49 @@ Which is what I don't want for text type responses from ASP.NET Core backend. Wh
 
 Now everything else is compressed except for JSON responses from ASP.NET Core.  
 ![weather forecast endpoint no longer compressed](./images/Screenshot%202026-04-15%20at%205.35.01 pm.png)
+
+## Caching Static Assets
+Next thing I want to add a caching of static assets.  
+```
+...
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            access_log off;
+        }
+...
+```
+
+I've added another location block with a filter that apply caching to files that is going to be server as per `(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)`. And also added a expiry where the static assets will expiry after a years time and then needs to be downloaded again. With the addition of the `Cache-Control` header that has the value of `public, immutable` means that the resources are in a shared cached (not a private cache) and it is unchangeable during the lifetime. This is also known as **cache busting** because since the javascript, CSS, image files contains a hash code, the browser will treat these files as new resources if I build another ReactJS app which will contain a different hash code.
+
+![Cache control after refreshing the page](./images/Screenshot%202026-04-16%20at%2011.58.22 am.png)
+
+And also `access_log off` just to stop logging of static asset requests (trying to reduce IO overhead as much as I can).
+
+## NGINX Performance Optimisation
+When I created the file initially, the only directive that I had that is related to performance is `worker_processes auto;`. Since I am running NGINX on docker on 2 different machines have but they have the same number of cores (which is 8..... yes my gaming PC is old but still does the job!), I'm going to set the `work_processes` directive value to 4.
+```
+worker_processes 4;
+...
+```
+
+### Worker Connection
+The directive `worker_connections` sets the maximum number of simultaneous connections that a NGINX worker process can have open and the default is 512. But since I have set a value on the `work_processes` directive and I'm running nginx and docker on my gaming PC and MacBook Air M1 I'm going to half the default value. If for whatever reason I'm going to exceed this on both machines then I'm definitely doing something wrong in both my frontend and backend 😅.  
+```
+...
+events {
+    worker_connections 256;
+    multi_accept on;
+    use epoll;
+}
+...
+```
+
+In the `event` block, I've added the `worker_connections` directive and also `multi_accept on` where a worker process can accept more than one connection at a time and also `use epoll` which allows the most efficient event processing on a linux system.
+
+### File Descriptor per Worker Connection
+Next is setting the File Descriptor per Worker Connection, but first what is a File Descriptor? A file descriptor is a process-unique identifier (PID) handle for a file or other IO resource such as pipes or network socket but that's on the OS level.  
+
 
 # References {#references}
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
@@ -2475,3 +2517,6 @@ Now everything else is compressed except for JSON responses from ASP.NET Core.
 * [Authorization header - HTTP | MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Authorization)
 * [Understanding HTTP Caching Headers: Cache-Control, ETag, Expires | HttpStatus.com](https://httpstatus.com/learn/understanding-http-caching-headers-cache-control-etag-expires)
 * [BREACH - Wikipedia](https://en.wikipedia.org/wiki/BREACH)
+* [Avoiding the Top 10 NGINX Configuration Mistakes | F5](https://www.f5.com/company/blog/nginx/avoiding-top-10-nginx-configuration-mistakes)
+* [Connection processing methods](https://nginx.org/en/docs/events.html)
+* [File descriptor - Wikipedia](https://en.wikipedia.org/wiki/File_descriptor)

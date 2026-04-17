@@ -2453,7 +2453,55 @@ events {
 In the `event` block, I've added the `worker_connections` directive and also `multi_accept on` where a worker process can accept more than one connection at a time and also `use epoll` which allows the most efficient event processing on a linux system.
 
 ### File Descriptor per Worker Connection
-Next is setting the File Descriptor per Worker Connection, but first what is a File Descriptor? A file descriptor is a process-unique identifier (PID) handle for a file or other IO resource such as pipes or network socket but that's on the OS level.  
+Next is setting the File Descriptor per Worker Connection, but first what is a File Descriptor? A file descriptor is a process-unique identifier (PID) handle for a file or other IO resource such as pipes or network socket but that's on the OS level. So basically a PID is associated with a file Descriptor. Running and filtering the `ps` command gave me this output:  
+```
+> docker exec intelligent_driscoll ps | grep -E "nginx: \w+ process"
+    1 nginx     0:00 nginx: master process nginx -c /etc/nginx/nginx.conf -g daemon off;
+    7 nginx     0:00 nginx: worker process
+    8 nginx     0:00 nginx: worker process
+    9 nginx     0:00 nginx: worker process
+   10 nginx     0:00 nginx: worker process
+```
+
+
+So there is a master process and 4 worker process and all of them running as the user **nginx** (maybe I should have gave another name to differentiate from the process n) and the number of worker process is inline with the `worker_processor` directive. The `worker_connection` directive specifies how the maximum number that a worker process can be open and the `worker_rlimit_nofile` directive will specify the maximum number of files that the process worker can open. Right now this each worker process has the following limit.  
+```
+> docker exec intelligent_driscoll sh -c 'pgrep -P 1 -f "nginx: worker" | while read pid; do echo "PID $pid: $(grep "open files" /proc/$pid/limits)"; done'
+PID 7: Max open files            1048576              1048576              files     
+PID 8: Max open files            1048576              1048576              files     
+PID 9: Max open files            1048576              1048576              files     
+PID 10: Max open files            1048576              1048576              files
+```
+
+The number of files each worker process can open is the same and high. But let's see the system wide limit for file descriptors. 
+```
+> docker exec intelligent_driscoll sysctl fs.file-max
+fs.file-max = 812108
+```
+
+So the worker process max file descriptor limit is higher than the system wide limit and the total number of than the maximum open files value for each worker process. So the File Descriptors needs to be at least twice as much as the `worker_connection` directive but needs to be less than the system wide limit. So I've set the maximum number of how many files a worker process can open to 512.  
+```
+worker_processes 4;
+worker_rlimit_nofile 512;
+...
+```
+
+Now it is much less.  
+```
+> docker exec intelligent_driscoll ps | grep -E "nginx: \w+ process"
+    1 nginx     0:00 nginx: master process nginx -c /etc/nginx/nginx.conf -g daemon off;
+    7 nginx     0:00 nginx: worker process
+    8 nginx     0:00 nginx: worker process
+    9 nginx     0:00 nginx: worker process
+   10 nginx     0:00 nginx: worker process
+> docker exec intelligent_driscoll sh -c 'pgrep -P 1 -f "nginx: worker" | while read pid; do echo "PID $pid: $(grep "open files" /proc/$pid/limits)"; done'
+PID 7: Max open files            512                  512                  files     
+PID 8: Max open files            512                  512                  files     
+PID 9: Max open files            512                  512                  files     
+PID 10: Max open files            512                  512                  files     
+```
+
+### HTTP Performance Settings
 
 
 # References {#references}
@@ -2520,3 +2568,4 @@ Next is setting the File Descriptor per Worker Connection, but first what is a F
 * [Avoiding the Top 10 NGINX Configuration Mistakes | F5](https://www.f5.com/company/blog/nginx/avoiding-top-10-nginx-configuration-mistakes)
 * [Connection processing methods](https://nginx.org/en/docs/events.html)
 * [File descriptor - Wikipedia](https://en.wikipedia.org/wiki/File_descriptor)
+* [Increase Nginx worker open files and connections](https://www.robert-michalski.com/blog/nginx-raise-connection-limit)

@@ -85,7 +85,10 @@ export default defineConfig({
         target: target,
         secure: true,
         agent: new https.Agent({
-          ca: readFileSync(certPath)
+          ca: readFileSync(certPath),
+          keepAlive: true,
+          keepAliveMsecs: 3000,
+          maxSockets: 5
         }),
         xfwd: true
       }
@@ -105,7 +108,7 @@ Scheme: https
 PathBase: 
 Path: /weatherforecast
 Accept: */*
-Connection: close
+Connection: keep-alive
 Host: localhost:5173
 User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36
 Accept-Encoding: gzip, deflate, br, zstd
@@ -448,7 +451,10 @@ export default defineConfig(({ command }) => {
         target: target,
         secure: true,
         agent: new https.Agent({
-          ca: readFileSync(certPath)
+          ca: readFileSync(certPath),
+          keepAlive: true,
+          keepAliveMsecs: 3000,
+          maxSockets: 5
         }),
         xfwd: true
       }
@@ -2580,7 +2586,7 @@ Next is to optimise buffer size and timeouts. These are the settings that I have
 
 ## Reverse proxy timeouts
 
-# References {#references}
+# References
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
 * [Dockerfile reference | Docker Docs](https://docs.docker.com/reference/dockerfile/)
 * [Best practices | Docker Docs](https://docs.docker.com/build/building/best-practices/)
@@ -2645,3 +2651,5 @@ Next is to optimise buffer size and timeouts. These are the settings that I have
 * [Connection processing methods](https://nginx.org/en/docs/events.html)
 * [File descriptor - Wikipedia](https://en.wikipedia.org/wiki/File_descriptor)
 * [Increase Nginx worker open files and connections](https://www.robert-michalski.com/blog/nginx-raise-connection-limit)
+* [Module ngx_http_proxy_module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
+* [Module ngx_http_core_module](https://nginx.org/en/docs/http/ngx_http_core_module.html)

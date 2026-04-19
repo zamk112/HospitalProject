@@ -390,15 +390,6 @@ dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.client.pem 
 When you run the above command, you will get another dialog box to enter your password:  
 ![Dialog Box to enter password](./images/Screenshot%202026-03-06%20at%209.44.38 pm.png)
 
-After entering the password and then clicking the *Allow* button, this will generate a pem and key file in the directory:  
-```cmd
-> mkdir -p ~/Workspaces/Certs/dotnet
-> dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.SSC.pem --format pem -np
-A valid HTTPS certificate is already present.
-> ls ~/Workspaces/Certs/dotnet
-hospitalproject.SSC.key      hospitalproject.SSC.pem
-```
-
 At the moment the **vite.config.ts** file looks pretty barren.  
 ```ts
   import { defineConfig } from 'vite'
@@ -422,7 +413,7 @@ import path from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import os from "node:os";
 
-const certName = 'hospitalproject.SSC';
+const certName = 'hospitalproject.client';
 const certFolder = path.join(os.homedir(), 'Workspaces', 'Certs', 'dotnet');
 const certPath = path.join(certFolder, `${certName}.pem`);
 const keyPath = path.join(certFolder, `${certName}.key`);
@@ -579,13 +570,12 @@ Error: self-signed certificate; if the root CA is installed locally, try running
 
 ```
 
-
 And no request is made to the backend, I can in definitely confirm that if you add the environment variable `NODE_USE_SYSTEM_CA=1` on Windows, the error `Error: self-signed certificate; if the root CA is installed locally, try running Node.js with --use-system-ca` goes away, because the command `dotnet dev-certs https --trust` already installed the self-signed certificate on the Windows Certificate store and it is the same on the MacOS certificate/keychain store and it's the same certificate that you're using for your ASP.NET Core application, but on my MacOS and Ubuntu, this is not the case. 
 
 #### Set Environment variable NODE_EXTRA_CA_CERTS
 The first option to get around this issue is exporting an environment variable `NODE_EXTRA_CA_CERTS` with the file path to your certificate to get around the issue on my macOS with the following command:  
 ```cmd
-> export NODE_EXTRA_CA_CERTS=~/Workspaces/Certs/dotnet/hospitalproject.SSC.pem
+> export NODE_EXTRA_CA_CERTS=~/Workspaces/Certs/dotnet/hospitalproject.client.pem
 > npm run dev
 
 > hospitalproject-client@0.0.0 dev
@@ -612,9 +602,70 @@ And then you can add the environment variable to [launch.json](../.vscode/launch
 But I found a better option, which I will discuss next!
 
 #### Adding agent property to proxy in ViteJS config
-Since I'm using the same self-signed certificates in different formats and already bound the certificate to the ViteJS proxy, instead of adding and environment variable, I've added an `agent` object to the `proxy` object and then instantiated a new `https.Agent` object and read-in the certificate file to the `ca` attribute.
+Since I'm using the same self-signed certificates in different formats and already bound the certificate to the ViteJS proxy, instead of adding and environment variable, I've added an `agent` object to the `proxy` object and then instantiated a new `https.Agent` object and read-in the certificate file to the `ca` attribute. `https.Agent` is a nodeJS module, which you can use with the http-proxy-3 configuration which ViteJS uses, so now everything is in [vite.config.ts](../HospitalProject.Client/vite.config.ts), no environment variables need! This is also good since I also use my gaming PC (which is running Ubuntu) for development as well (yay for cross platform development 😃).
+```ts
+...
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    https: {
+      key: readFileSync(keyPath),
+      cert: readFileSync(certPath)
+    },
+    proxy: {
+      '^/weatherforecast': {
+        target: target,
+        secure: true,
+        agent: new https.Agent({
+          ca: readFileSync(certPath),
+          keepAlive: true,
+          keepAliveMsecs: 3000,
+          maxSockets: 5
+        })
+      }
+    }
+  },
+})
+...
+```
 
-`https.Agent` is a nodeJS module, which you can use with the http-proxy-3 configuration which ViteJS uses, so now everything is in [vite.config.ts](../HospitalProject.Client/vite.config.ts), no environment variables need! This is also good since I also use my gaming PC (which is running Ubuntu) for development as well (yay for cross platform development 😃).
+In additional to reading the certificate file and passing it in the `ca` attribute, I've also added `keepAlive`, `keepAliveMsecs` & `maxSockets` attributes so that it will be only make TCP connection which all the requests will communicate back and forth from the proxy to ASP.Core Backend. Later, I'll be deploying both frontend and backend on Docker with the frontend hosted with NGINX doing reverse proxy API calls to ASP.NET Core backend and both frontend and backend will be using HTTP/2 protocol. The **http-proxy-3** proxy HTTP/2 implementation is still experimental. So I'm just sticking to HTTP/1.1 for the local development. The `keepAliveMsecs` value 1000 will keep the connection alive for 3 seconds and the `maxSockets` which is the maximum number of concurrent connections that the proxy can open is 5. With all of these enabled, the proxy will send a `Connection` header with the value of `keep-alive` to ASP.NET Core.
+```
+2026-04-19 17:50:41 [INF] Request starting HTTP/1.1 GET https://localhost:5173/weatherforecast - null null
+2026-04-19 17:50:41 [INF] Request:
+Protocol: HTTP/1.1
+Method: GET
+Scheme: https
+PathBase:
+Path: /weatherforecast
+Accept: */*
+Connection: keep-alive                                                                                            <----- HERE!!!
+Host: localhost:5173
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36
+Accept-Encoding: gzip, deflate, br, zstd
+Accept-Language: en-GB,en-US;q=0.9,en;q=0.8
+Referer: https://localhost:5173/
+sec-ch-ua-platform: "macOS"
+sec-ch-ua: "Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"
+sec-ch-ua-mobile: ?0
+sec-fetch-site: same-origin
+sec-fetch-mode: cors
+sec-fetch-dest: empty
+priority: u=1, i
+2026-04-19 17:50:41 [INF] Executing endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-04-19 17:50:41 [INF] Route matched with {action = "Get", controller = "WeatherForecast"}. Executing controller action with signature System.Collections.Generic.IEnumerable`1[HospitalProject.Server.WeatherForecast] Get() on controller HospitalProject.Server.Controllers.WeatherForecastController (HospitalProject.Server).
+2026-04-19 17:50:41 [INF] Executing ObjectResult, writing value of type 'HospitalProject.Server.WeatherForecast[]'.
+2026-04-19 17:50:41 [INF] Response:
+StatusCode: 200
+Content-Type: application/json; charset=utf-8
+2026-04-19 17:50:41 [INF] Executed action HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server) in 1.0472ms
+2026-04-19 17:50:41 [INF] Executed endpoint 'HospitalProject.Server.Controllers.WeatherForecastController.Get (HospitalProject.Server)'
+2026-04-19 17:50:41 [INF] ResponseBody: [{"date":"2026-04-20","temperatureC":54,"temperatureF":129,"summary":"Mild"},{"date":"2026-04-21","temperatureC":-7,"temperatureF":20,"summary":"Chilly"},{"date":"2026-04-22","temperatureC":5,"temperatureF":40,"summary":"Chilly"},{"date":"2026-04-23","temperatureC":34,"temperatureF":93,"summary":"Cool"},{"date":"2026-04-24","temperatureC":-3,"temperatureF":27,"summary":"Warm"}]
+2026-04-19 17:50:41 [INF] Duration: 1.8135ms
+2026-04-19 17:50:41 [INF] HTTP GET /weatherforecast responded 200 in 1.8861 ms
+2026-04-19 17:50:41 [INF] Request finished HTTP/1.1 GET https://localhost:5173/weatherforecast - 200 null application/json; charset=utf-8 3.3177ms
+
+```
 
 # Bringing it all together - Launch configurations
 In my workspace, I'm going to create a [launch.json](../.vscode/launch.json) there was 2 launch configuration one for launching the ASP.NET Core web stack and the other will be for launching ViteJS/ReactJS web stack. And lastly, a compound launch configuration launching both applications at the same time. See below launch configuration for launching ASP.NET Core:  
@@ -678,7 +729,7 @@ Next I need to create a launch configuration for ReactJS and it will need to loa
         "action": "debugWithChrome"
     },
     // "env": {
-    //     "NODE_EXTRA_CA_CERTS": "${userHome}/Workspaces/Certs/dotnet/hospitalproject.SSC.pem"
+    //     "NODE_EXTRA_CA_CERTS": "${userHome}/Workspaces/Certs/dotnet/hospitalproject.client.pem"
     // }
 }, 
 ...
@@ -721,3 +772,4 @@ Now you can launch both launch configuration with the compound configuration!
 * [Node.js debugging in VS Code](https://code.visualstudio.com/docs/nodejs/nodejs-debugging)
 * [Visual Studio Code debug configuration](https://code.visualstudio.com/docs/debugtest/debugging-configuration)
 * [.net - Debugging ReactJS Components in AspNet Core - Stack Overflow](https://stackoverflow.com/questions/66012523/debugging-reactjs-components-in-aspnet-core)
+* [HTTP | Node.js v25.9.0 Documentation](https://nodejs.org/api/http.html)

@@ -31,7 +31,10 @@ export default defineConfig(({ command }) => {
         target: target,
         secure: true,
         agent: new https.Agent({
-          ca: readFileSync(certPath)
+          ca: readFileSync(certPath),
+          keepAlive: true,
+          keepAliveMsecs: 3000,
+          maxSockets: 5
         }),
         xfwd: true
       }

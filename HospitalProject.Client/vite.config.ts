@@ -6,7 +6,7 @@ import os from "node:os";
 import { env } from "node:process";
 import https from "https";
 
-const certName = 'hospitalproject.SSC';
+const certName = 'hospitalproject.client';
 const certFolder = path.join(os.homedir(), 'Workspaces', 'Certs', 'dotnet');
 const certPath = path.join(certFolder, `${certName}.pem`);
 const keyPath = path.join(certFolder, `${certName}.key`);
@@ -30,7 +30,10 @@ export default defineConfig({
         target: target,
         secure: true,
         agent: new https.Agent({
-          ca: readFileSync(certPath)
+          ca: readFileSync(certPath),
+          keepAlive: true,
+          keepAliveMsecs: 3000,
+          maxSockets: 5
         })
       }
     }

@@ -14,7 +14,11 @@ public static class KestrelConfigurationExtensions
         {
             serverOptions.ConfigureHttpsDefaults(httpsOptions =>
             {
-               httpsOptions.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    httpsOptions.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                }
+               
                httpsOptions.HandshakeTimeout = TimeSpan.FromSeconds(10);
                
                if (hostEnvironment.IsProduction())
@@ -52,7 +56,7 @@ public static class KestrelConfigurationExtensions
 
             serverOptions.ConfigureEndpointDefaults(endpointOptions =>
             {
-                endpointOptions.Protocols = HttpProtocols.Http1AndHttp2;                
+                endpointOptions.Protocols = HttpProtocols.Http1AndHttp2;             
             });
 
             if (hostEnvironment.IsProduction())

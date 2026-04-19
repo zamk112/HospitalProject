@@ -7,7 +7,9 @@ And since this is project is based on hospital CRM, end-to-end encryption needs 
 
 Before I start creating a Docker file for the backend, I need to add some and make changes code to the application and these changes are related for running the application on NGINX. 
 
-A good starting point document for NGINX that I found was [How To Deploy a React Application with Nginx on Ubuntu | DigitalOcean](https://www.digitalocean.com/community/tutorials/deploy-react-application-with-nginx-on-ubuntu). It really help out a lot in terms of understanding how NGINX works.
+A good starting point document for NGINX that I found was [How To Deploy a React Application with Nginx on Ubuntu | DigitalOcean](https://www.digitalocean.com/community/tutorials/deploy-react-application-with-nginx-on-ubuntu). It really help out a lot in terms of a starting point of how to configure NGINX.
+
+But I am customizing the NGINX config for the I am hosting now with ReactJS and it is very small, as I build my application, so things like timeouts, memory usage and worker processes is going to be small but as my application becomes larger, these configurations will change! But for now, I want to go with the very minimum and see what happens as my application grows.
 
 # Configuring and Adding Forward Headers 
 The first thing I need to do is to add the Forward Request middleware and the reason for adding the Forward Request middleware is that NGINX will forward the request to the ASP.NET Core/Kestrel backend. I've added the Forward Request middleware just after the intialising the `app` variable step.  
@@ -260,7 +262,7 @@ appsettings.json
 appsettings.*.json
 ```
 
-And the reason for excluding the **appsettings.json** files is because I want to be able to make changes to my configuration without deploying a new image and container. I have been running the command from the terminal `docker build -t hospital.project.server -f HospitalProject.Server/Dockerfile --pull HospitalProject.Server` to build the docker container image and also use Docker Desktop to inspect the image with the debugger console.  
+And the reason for excluding the **appsettings.json** files is because I want to be able to make changes to my configuration without deploying a new image and container. I have been running the command from the terminal `docker build -t hospital.project.server -f HospitalProject.Server/Dockerfile --pull HospitalProject.Server/` to build the docker container image and also use Docker Desktop to inspect the image with the debugger console.  
 ![Inspecting Docker Container Image](./images/Screenshot%202026-03-10%20at%2010.42.14 am.png)
 
 Just one thing I'd like to mention with my `docker build` command is that I added the `--pull` argument, so the build context can reference all docker related config files such as **.dockerignore** file, which I have not included for this build (but I have in the ReactJS and NGINX) build.
@@ -534,7 +536,14 @@ pid /tmp/nginx.pid;
 events {}
 
 http {
-    include /etc/nginx/mime.types;
+    types {
+       text/html                html htm;
+       text/css                 css;
+       application/javascript   js;
+       application/json         json; 
+       image/png                png;
+       image/svg+xml            svg svgz;
+    }
 
     client_body_temp_path   /tmp/client_temp;
     proxy_temp_path         /tmp/proxy_temp;
@@ -568,7 +577,20 @@ http {
 }
 ```
 
-This is actually the bare minimum that I need to run both NGIX and ReactJS, worker process (4 cores on linux) and worker connections (512 worker connections) are pretty much defaulting to the NGIX default values. The server is using SSL with HTTP2 with the server name being **localhost**. And I also had to add `include /etc/nginx/mime.types;` otherwise the server does not dish out the CSS, HTML and JavaScript files to the browser. Before adding the following configuration to the file. NGIX failed to start because it needed these directories:  
+This is actually the bare minimum that I need to run both NGIX and ReactJS, worker process (4 cores on linux) and worker connections (512 worker connections) are pretty much defaulting to the NGIX default values. The server is using SSL with HTTP2 with the server name being **localhost**. Initially I did add `include /etc/nginx/mime.types;` otherwise the server does not dish out the CSS, HTML and JavaScript files to the browser. But I reduced the types list to what react is currently rendering.   
+```
+...
+    types {
+       text/html                html htm;
+       text/css                 css;
+       application/javascript   js;
+       application/json         json; 
+       image/png                png;
+       image/svg+xml            svg svgz;
+    }
+...
+```
+I did get the values from **/etc/nginx/mime.types** thought. But before adding the following configuration to the file. NGIX failed to start because it needed these directories:  
 ```
     client_body_temp_path   /tmp/client_temp;
     proxy_temp_path         /tmp/proxy_temp;
@@ -584,7 +606,9 @@ Just removing the last entry `scgi_temp_path /tmp/scgi_temp;`, would give you th
 nginx: [emerg] mkdir() "/var/cache/nginx/scgi_temp" failed (13: Permission denied)
 ```
 
-It is trying to create a docker in **/var/cache/nginx/scgi_temp** but failing that is why I've pointed everything to the **/tmp** directory and this error message is very similar if not almost the same as the preceding configurations before it. As you can see I'm binding SSL certificates to the frontend but I have disabled SSL certification for my ASP.NET Core API endpoint with `proxy_ssl_verify off;` and the URL contains the IP address of the ASP.NET Core web API endpoint. 
+It is trying to create a docker in **/var/cache/nginx/scgi_temp** but failing that is why I've pointed everything to the **/tmp** directory and this error message is very similar if not almost the same as the preceding configurations before it. These directives are at least for the proxy (`proxy_temp_path`) and front end API `client_body_temp_path` calls when you do a request that contains a body, these are stored temporarily in these directories for processing.
+
+As you can see I'm binding SSL certificates to the frontend but I have disabled SSL certification for my ASP.NET Core API endpoint with `proxy_ssl_verify off;` and the URL contains the IP address of the ASP.NET Core web API endpoint. 
 
 I had to do this because I just wanted to make sure that my docker containers were talking to each other which they are! Next, I will need to do some networking configurations, and generating custom certificates (using the OpenSSL tool to do) and then enable SSL verification. But right now, I need to rebuild my image.  
 ```cmd
@@ -1652,6 +1676,19 @@ As mentioned earlier, the `ForwardedHeaderOptions` string value is split up, tri
 
 And for known proxies, Firstly, I'm clearing out all the known proxy values and then using the `System.Net.IPAddress.Parse()` to parse out the IP address from the array and then storing them. 
 
+Now my run command has 2 environment variables less:
+```
+> docker run -d --network hospital-network --ip 10.0.0.3 --network-alias hospitalproject.api.local \
+-e ASPNETCORE_URLS="https://+:5229" \
+-e ASPNETCORE_Kestrel__Certificates__Default__Path=/https/hospitalproject.server.pfx \
+-e ASPNETCORE_Kestrel__Certificates__Default__Password="************" \
+-e ASPNETCORE_ENVIRONMENT=Staging \
+-v ~/Workspaces/Certs/hospital.project/hospital.project.server.pfx:/https/hospitalproject.server.pfx:ro \
+-v ~/Projects/HospitalProject/HospitalProject.Server/appsettings.Staging.json:/app/appsettings.Staging.json:ro \
+hospital.project.server
+3640ff739c92beea82c034b26fcf266b246dd0159853fd7130bc4b0df96c0f28
+```
+
 The `LogForwardHeaderOptionsConfiguration()` function just logs the Forward Headers and known proxies that are set (for debugging purposes of course!). Lastly, in the app middleware pipeline, it just now `app.UseForwardHeaders()` from what it was initially before.  
 
 ## SSL Configuration
@@ -1682,7 +1719,11 @@ public static class KestrelConfigurationExtensions
         {
             serverOptions.ConfigureHttpsDefaults(httpsOptions =>
             {
-               httpsOptions.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    httpsOptions.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                }
+
                httpsOptions.HandshakeTimeout = TimeSpan.FromSeconds(10);
                
                if (hostEnvironment.IsProduction())
@@ -1735,7 +1776,7 @@ public static class KestrelConfigurationExtensions
 }
 ```
 
-A few things, in `KestrelServerOptions.ConfigureHttpsDefaults()`, `httpsOptions.SslProtocols` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.SslProtocols`) basically allows what protocols that I want to use. Whereas `sslOptions.EnabledSslProtocols` (or `SslServerAuthenticationOptions.EnabledSslProtocols`) basically says what protocols can be matched when authentication occurs. And another thing as well `IWebHostBuilder.ConfigureKestrel()` & `KestrelServerOptions.ConfigureHttpsDefaults()` takes in `Action` delegates as parameters and to me this basically means, these will get executed when ASP.NET Core is launched and at least for `ConfigureHttpsDefaults()` each time a HTTPS endpoint is created as per [Configure endpoints for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0#configure-https). 
+A few things, in `KestrelServerOptions.ConfigureHttpsDefaults()`, `httpsOptions.SslProtocols` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.SslProtocols`) If you're hosting ASP.NET Core on Windows, the TLS Protocols, SSL Certificates and ciphers are tied to the operating system, on linux environments this is not the case (not sure about MacOS though), so this is why I specified which TLS Protocols to use. Whereas `sslOptions.EnabledSslProtocols` (or `SslServerAuthenticationOptions.EnabledSslProtocols`) basically says what protocols can be matched when authentication occurs.. 
 
 However, with `httpsOptions.OnAuthenticate` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.OnAuthenticate`) is a variable where you assign a `Action` delegate function and it is used each time for authentication. And `sslOptions.EncryptionPolicy` (or `SslServerAuthenticationOptions.EncryptionPolicy`) and I've chosen particular cipher suites for both TLS version 1.2 and version 1.3 that supports AES encryption (since all my certificates has been encrypted with AES256). And the cipher suite is mostly based off the [TLS Cipher Suites in Windows Server 2022 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthn/tls-cipher-suites-in-windows-server-2022) in terms of order and preference.
 
@@ -2417,7 +2458,7 @@ Now everything else is compressed except for JSON responses from ASP.NET Core.
 Next thing I want to add a caching of static assets.  
 ```
 ...
-        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        location ~* \.(js|css|png|svg)$ {
             expires 1y;
             add_header Cache-Control "public, immutable";
             access_log off;
@@ -2425,16 +2466,16 @@ Next thing I want to add a caching of static assets.
 ...
 ```
 
-I've added another location block with a filter that apply caching to files that is going to be server as per `(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)`. And also added a expiry where the static assets will expiry after a years time and then needs to be downloaded again. With the addition of the `Cache-Control` header that has the value of `public, immutable` means that the resources are in a shared cached (not a private cache) and it is unchangeable during the lifetime. This is also known as **cache busting** because since the javascript, CSS, image files contains a hash code, the browser will treat these files as new resources if I build another ReactJS app which will contain a different hash code.
+I've added another location block with a filter that apply caching to files that is going to be server as per `(js|css|png|svg)`. And also added a expiry where the static assets will expiry after a years time and then needs to be downloaded again. With the addition of the `Cache-Control` header that has the value of `public, immutable` means that the resources are in a shared cached (not a private cache) and it is unchangeable during the lifetime. This is also known as **cache busting** because since the javascript, CSS, image files contains a hash code, the browser will treat these files as new resources if I build another ReactJS app which will contain a different hash code.
 
 ![Cache control after refreshing the page](./images/Screenshot%202026-04-16%20at%2011.58.22 am.png)
 
 And also `access_log off` just to stop logging of static asset requests (trying to reduce IO overhead as much as I can).
 
 ## NGINX Performance Optimisation
-When I created the file initially, the only directive that I had that is related to performance is `worker_processes auto;`. Since I am running NGINX on docker on 2 different machines have but they have the same number of cores (which is 8..... yes my gaming PC is old but still does the job!), I'm going to set the `work_processes` directive value to 4.
+When I created the file initially, the only directive that I had that is related to performance is `worker_processes auto;`. Since I am running NGINX on docker on 2 different machines have but they have the same number of cores (which is 8..... yes my gaming PC is old but still does the job!), I'm going to set the `work_processes` directive value to 2.
 ```
-worker_processes 4;
+worker_processes 2;
 ...
 ```
 
@@ -2443,7 +2484,7 @@ The directive `worker_connections` sets the maximum number of simultaneous conne
 ```
 ...
 events {
-    worker_connections 256;
+    worker_connections 128;
     multi_accept on;
     use epoll;
 }
@@ -2455,22 +2496,18 @@ In the `event` block, I've added the `worker_connections` directive and also `mu
 ### File Descriptor per Worker Connection
 Next is setting the File Descriptor per Worker Connection, but first what is a File Descriptor? A file descriptor is a process-unique identifier (PID) handle for a file or other IO resource such as pipes or network socket but that's on the OS level. So basically a PID is associated with a file Descriptor. Running and filtering the `ps` command gave me this output:  
 ```
-> docker exec intelligent_driscoll ps | grep -E "nginx: \w+ process"
+> docker exec gracious_elbakyan ps | grep -E "nginx: \w+ process"   
     1 nginx     0:00 nginx: master process nginx -c /etc/nginx/nginx.conf -g daemon off;
     7 nginx     0:00 nginx: worker process
     8 nginx     0:00 nginx: worker process
-    9 nginx     0:00 nginx: worker process
-   10 nginx     0:00 nginx: worker process
 ```
 
 
 So there is a master process and 4 worker process and all of them running as the user **nginx** (maybe I should have gave another name to differentiate from the process n) and the number of worker process is inline with the `worker_processor` directive. The `worker_connection` directive specifies how the maximum number that a worker process can be open and the `worker_rlimit_nofile` directive will specify the maximum number of files that the process worker can open. Right now this each worker process has the following limit.  
 ```
-> docker exec intelligent_driscoll sh -c 'pgrep -P 1 -f "nginx: worker" | while read pid; do echo "PID $pid: $(grep "open files" /proc/$pid/limits)"; done'
+> docker exec gracious_elbakyan sh -c 'pgrep -P 1 -f "nginx: worker" | while read pid; do echo "PID $pid: $(grep "open files" /proc/$pid/limits)"; done'
 PID 7: Max open files            1048576              1048576              files     
 PID 8: Max open files            1048576              1048576              files     
-PID 9: Max open files            1048576              1048576              files     
-PID 10: Max open files            1048576              1048576              files
 ```
 
 The number of files each worker process can open is the same and high. But let's see the system wide limit for file descriptors. 
@@ -2481,28 +2518,67 @@ fs.file-max = 812108
 
 So the worker process max file descriptor limit is higher than the system wide limit and the total number of than the maximum open files value for each worker process. So the File Descriptors needs to be at least twice as much as the `worker_connection` directive but needs to be less than the system wide limit. So I've set the maximum number of how many files a worker process can open to 512.  
 ```
-worker_processes 4;
-worker_rlimit_nofile 512;
+worker_processes 2;
+worker_rlimit_nofile 256;
 ...
 ```
 
 Now it is much less.  
 ```
-> docker exec intelligent_driscoll ps | grep -E "nginx: \w+ process"
+> docker exec gracious_elbakyan ps | grep -E "nginx: \w+ process"
     1 nginx     0:00 nginx: master process nginx -c /etc/nginx/nginx.conf -g daemon off;
     7 nginx     0:00 nginx: worker process
     8 nginx     0:00 nginx: worker process
-    9 nginx     0:00 nginx: worker process
-   10 nginx     0:00 nginx: worker process
-> docker exec intelligent_driscoll sh -c 'pgrep -P 1 -f "nginx: worker" | while read pid; do echo "PID $pid: $(grep "open files" /proc/$pid/limits)"; done'
-PID 7: Max open files            512                  512                  files     
-PID 8: Max open files            512                  512                  files     
-PID 9: Max open files            512                  512                  files     
-PID 10: Max open files            512                  512                  files     
+
+> docker exec gracious_elbakyan sh -c 'pgrep -P 1 -f "nginx: worker" | while read pid; do echo "PID $pid: $(grep "open files" /proc/$pid/limits)"; done'
+PID 7: Max open files            256                  256                  files     
+PID 8: Max open files            256                  256                  files      
 ```
 
 ### HTTP Performance Settings
+Next I'm adding HTTP performance optimisation settings in [staging.nginx.conf](../HospitalProject.Client/staging.nginx.conf).
 
+## Basic Settings
+Starting off with directives for the `http` block these are the directives that I have set.  
+```
+...
+    sendfile                    on;
+    send_timeout                10s;
+    tcp_nopush                  on;
+    tcp_nodelay                 on;
+    keepalive_timeout           35s;
+    types_hash_max_size         64;
+...
+```
+
+* `sendfile` directive is on, so nginx will send a file to a socket with `sendfile(2)` syscall when serving files from disk.
+* `send_timeout` directive sets the timeout for transmitting a response back to the client. The timeout is set between two successive write operations, but not for the transmission of the whole response. The 10 second timeout is a little bit aggressive but at the moment, the frontend is just rending one page and doing an API call. This is one of the directives I think I will need to change later, if the kernel send buffer fills up (because the client is reading slowly, or has a slow connection), NGINX writes a block. `send_timeout` is how long NGINX waits for the client to acknowledge enough data to free up buffer space before giving up and closing the connection. Essentially, it's a timeout on the client's TCP read buffer being available.
+* Since I have `sendfile` directive on; I'm also enabling `tcp_nopush` to on which enables the `TCP_CORK` socket option on Linux, which doesn't send out partial frames. Everything gets queued and then sent. 
+* Coupling with the `tcp_nopush` directive, I'm also enabling `tcp_nodelay`, this will disable the Nagle algorithm, which means that segments are always sent out as soon as possible, even if there is only a small amount of data.
+* `keepalive_timeout` directive to 35 seconds, I've shorten it from the default timeout from 75 seconds, once everything is served it shouldn't keep the connection open longer than it needs to, that being said, I'm just using the scaffolded out code from ReactJS and ASP.NET Core with the only addition of React doing a API call to the backend to render the weather forecast data, once I start creating pages and add page navigation this directive value will have to increase because of the time it needs to serve the contents to the client and factoring the SSL/TLS handshake and what not, and if this was a real app I also have to factor in the number of people using this application as well. This directive only applies to the `http`, `server` and `location` blocks. But in the `upstream` block I might need to add a `keepalive_timeout` there as well.
+* Lastly, I've added the `types_hash_max_size` since the mime types and the number of server name is small, the max size for the hash time is small.
+
+## Buffer size & timeouts
+Next is to optimise buffer size and timeouts. These are the settings that I have added in the `http` block:  
+```
+...
+    client_body_buffer_size     8k;
+    client_max_body_size        1m;
+    client_header_buffer_size   1k;
+    large_client_header_buffers 4 4k;
+    client_body_timeout         12s;
+    client_header_timeout       12s;
+...
+```
+
+* `client_body_buffer_size` directive is set to 8 kilobytes, which sets the buffer size for reading the client request body. And this is another directive I will definitely need to change later. Right now, I don't have an API call where I am also sending a body as part of the request. The buffer will write out partially or as a whole into the directory specified in the `client_body_temp_path` directive.
+* `client_max_body_size` directive is just 1 megabyte and again, I don't have an API call to that utilises a body as part of it's request. This is another directive that I will need to come back to change.
+* `client_header_buffer_size` directive is 1 kilobyte, and this is the default value as well. And this is another directive that will change later too because it will include cookies.
+* `large_client_header_buffers` directive has the number of 4 buckets and size of 4k for large headers that cannot fit into the size specified in the `client_header_buffer_size` directive.
+* `client_body_timeout` directive with the value of 12 seconds is for the timeout for reading the client request body. If the client does not transmit anything the timeout expires it will return a HTTP 408 response.
+* `client_header_timeout` directive with the value of 12 seconds is for the timeout for reading the client request header. If the client does not transmit anything the timeout expires it will return a HTTP 408 response.
+
+## Reverse proxy timeouts
 
 # References {#references}
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)

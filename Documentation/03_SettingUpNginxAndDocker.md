@@ -2431,10 +2431,7 @@ http {
     gzip_types
         text/plain
         text/css
-        text/xml
-        text/javascript
         application/javascript
-        application/xml+rss
         application/json
         image/svg+xml;
     ...

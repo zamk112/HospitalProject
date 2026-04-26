@@ -2582,6 +2582,18 @@ Next is to optimise buffer size and timeouts. These are the settings that I have
 * `client_header_timeout` directive with the value of 12 seconds is for the timeout for reading the client request header. If the client does not transmit anything the timeout expires it will return a HTTP 408 response.
 
 ## Reverse proxy timeouts
+Coming back to the reverse proxy, I've added times of the following:   
+```
+...
+            proxy_connect_timeout               5s;
+            proxy_send_timeout                  30s;
+            proxy_read_timeout                  30s;
+...
+```
+
+`proxy_connect_timeout` sets the timeout for establishing a connection with ASP.NET Core backend. And it should be quick since both are running on a docker container on the same network bridge/subnet.
+
+`proxy_send_timeout` sets the timeout for transmitting a request to the ASP.NET Core backend. The timeout is set only between two successive write opterations not for the whole transmission, I can see this directive changing and also the next one which is `proxy_read_timeout` which is reading a response from ASP.NET Core.
 
 # References
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)

@@ -13,13 +13,13 @@ public static class ForwardedHeadersExtensions
         {
             var forwardHeadersSection = configuration.GetSection("ForwardedHeaders");
 
-            if (string.IsNullOrEmpty(forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()) && hostEnvironment.IsDevelopment())
+            if (string.IsNullOrEmpty(forwardHeadersSection.GetValue<string>("ForwardedHeaderOptions")) && hostEnvironment.IsDevelopment())
             {
                 options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
             }
-            else if (!string.IsNullOrEmpty(forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()))
+            else if (!string.IsNullOrEmpty(forwardHeadersSection.GetValue<string>("ForwardedHeaderOptions")))
             {
-                var forwardHeaderOptionsStr = forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()?.Trim();
+                var forwardHeaderOptionsStr = forwardHeadersSection.GetValue<string>("ForwardedHeaderOptions")!.Trim();
 
                 if (!string.IsNullOrEmpty(forwardHeaderOptionsStr))
                 {

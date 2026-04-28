@@ -1614,17 +1614,17 @@ public static class ForwardedHeadersExtensions
 {
     public static IServiceCollection AddForwardHeaderOptionsConfiguration(this IServiceCollection services, IConfiguration configuration, IWebHostEnvironment hostEnvironment)
     {
-        services.Configure<ForwardedHeadersOptions>(opts =>
+        services.Configure<ForwardedHeadersOptions>(options =>
         {
             var forwardHeadersSection = configuration.GetSection("ForwardedHeaders");
 
-            if (string.IsNullOrEmpty(forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()) && hostEnvironment.IsDevelopment())
+            if (string.IsNullOrEmpty(forwardHeadersSection.GetValue<string>("ForwardedHeaderOptions")) && hostEnvironment.IsDevelopment())
             {
-                opts.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+                options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
             }
-            else if (!string.IsNullOrEmpty(forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()))
+            else if (!string.IsNullOrEmpty(forwardHeadersSection.GetValue<string>("ForwardedHeaderOptions")))
             {
-                var forwardHeaderOptionsStr = forwardHeadersSection.GetSection("ForwardedHeaderOptions").Get<string>()?.Trim();
+                var forwardHeaderOptionsStr = forwardHeadersSection.GetValue<string>("ForwardedHeaderOptions")!.Trim();
 
                 if (!string.IsNullOrEmpty(forwardHeaderOptionsStr))
                 {
@@ -1644,7 +1644,7 @@ public static class ForwardedHeadersExtensions
                         forwardedHeaders = Enum.Parse<ForwardedHeaders>(forwardHeaderOptionsStr);
                     }
 
-                    opts.ForwardedHeaders = forwardedHeaders;
+                    options.ForwardedHeaders = forwardedHeaders;
                 }
                 else
                 {
@@ -1654,10 +1654,10 @@ public static class ForwardedHeadersExtensions
                 var knownProxiesSection = forwardHeadersSection.GetSection("KnownProxies").Get<string[]>();
                 if (knownProxiesSection != null)
                 {
-                    opts.KnownProxies.Clear();
+                    options.KnownProxies.Clear();
                     foreach(var proxy in knownProxiesSection)
                     {
-                        opts.KnownProxies.Add(IPAddress.Parse(proxy));
+                        options.KnownProxies.Add(IPAddress.Parse(proxy));
                     }
                 }
             }
@@ -1717,38 +1717,37 @@ namespace HospitalProject.Server.Extensions;
 
 public static class KestrelConfigurationExtensions
 {
-    public static IWebHostBuilder ConfigureKestrelHttpsDefaults (this IWebHostBuilder webHostBuilder, IWebHostEnvironment hostEnvironment)
+    public static IWebHostBuilder ConfigureKestrelHttpsDefaults (this IWebHostBuilder webHostBuilder, IConfiguration configuration, IWebHostEnvironment hostEnvironment)
     {
 
-        
         webHostBuilder.ConfigureKestrel((context, serverOptions) =>
         {
+
+            var httpsConfiguration = configuration.GetSection("Kestrel:Server:Https");
+
             serverOptions.ConfigureHttpsDefaults(httpsOptions =>
             {
-                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                {
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && !hostEnvironment.IsDevelopment())
                     httpsOptions.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
-                }
-
-               httpsOptions.HandshakeTimeout = TimeSpan.FromSeconds(10);
                
-               if (hostEnvironment.IsProduction())
-                {
-                    httpsOptions.CheckCertificateRevocation = true;
-                }
+                if (httpsConfiguration.GetValue<long?>("HandshakeTimeout") is long seconds)
+                    httpsOptions.HandshakeTimeout = TimeSpan.FromSeconds(seconds);
+
+                if (httpsConfiguration.GetValue<bool?>("CheckCertificateRevocation") is bool checkCertificateRevocation)
+                    httpsOptions.CheckCertificateRevocation = checkCertificateRevocation;
 
                 httpsOptions.OnAuthenticate = (connectionContext, sslOptions) =>
                 {
-                    sslOptions.ApplicationProtocols = new List<SslApplicationProtocol>
-                    {
+                    sslOptions.ApplicationProtocols =
+                    [
                         SslApplicationProtocol.Http2,
                         SslApplicationProtocol.Http11
-                    };
+                    ];
 
-                    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    if (!(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || hostEnvironment.IsDevelopment()))
                     {
-                        sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(new[]
-                        {
+                        sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(
+                        [
                             // TLS 1.3 cipher suites
                             TlsCipherSuite.TLS_AES_256_GCM_SHA384,
                             TlsCipherSuite.TLS_AES_128_GCM_SHA256,
@@ -1758,7 +1757,7 @@ public static class KestrelConfigurationExtensions
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-                        }); 
+                        ]); 
                     }
                     sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
                     sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;
@@ -1767,25 +1766,161 @@ public static class KestrelConfigurationExtensions
 
             serverOptions.ConfigureEndpointDefaults(endpointOptions =>
             {
-                endpointOptions.Protocols = HttpProtocols.Http1AndHttp2;                
+                endpointOptions.Protocols = HttpProtocols.Http1AndHttp2;        
             });
 
-            if (hostEnvironment.IsProduction())
-            {
-                serverOptions.Limits.MaxConcurrentConnections = 1000;
-                serverOptions.Limits.MaxRequestBodySize = 10485760;
-            }
+            var serverLimits = httpsConfiguration.GetSection("Limits");
+
+            if (serverLimits.GetValue<long?>("MaxConcurrentConnections") is long maxConcurrentConnections)
+                 serverOptions.Limits.MaxConcurrentConnections = maxConcurrentConnections;
+
+            if (serverLimits.GetValue<long?>("MaxRequestBodySize") is long maxRequestBodySize)
+                serverOptions.Limits.MaxRequestBodySize = maxRequestBodySize;
+
+            if (serverLimits.GetValue<long?>("MaxResponseBufferSize") is long maxResponseBufferSize)
+                serverOptions.Limits.MaxResponseBufferSize = maxResponseBufferSize;
+
+            if (serverLimits.GetValue<long?>("KeepAliveTimeout") is long keepAliveTimeout)
+                serverOptions.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(keepAliveTimeout);
+
+            if (GetMinDataRate(serverLimits.GetSection("MinRequestBodyDataRate")) is { } reqRate)
+                serverOptions.Limits.MinRequestBodyDataRate = reqRate;
+
+            if (GetMinDataRate(serverLimits.GetSection("MinResponseDataRate")) is { } resRate)
+                serverOptions.Limits.MinResponseDataRate = resRate;
+
+            var http2Limits = serverLimits.GetSection("HTTP2");
+
+            if (http2Limits.GetValue<int?>("MaxStreamsPerConnection") is int maxStreamsPerConnection)
+                serverOptions.Limits.Http2.MaxStreamsPerConnection = maxStreamsPerConnection;
+
+            if (http2Limits.GetValue<int?>("HeaderTableSize") is int headerTableSize)
+                serverOptions.Limits.Http2.HeaderTableSize = headerTableSize;
+
+            if (http2Limits.GetValue<int?>("MaxFrameSize") is int maxFrameSize)
+                serverOptions.Limits.Http2.MaxFrameSize = maxFrameSize;
+
+            if (http2Limits.GetValue<int?>("MaxRequestHeaderFieldSize") is int maxRequestHeaderFieldSize)
+                serverOptions.Limits.Http2.MaxRequestHeaderFieldSize = maxRequestHeaderFieldSize;
+
+            if (http2Limits.GetValue<int?>("InitialConnectionWindowSize") is int initialConnectionWindowSize)
+                serverOptions.Limits.Http2.InitialConnectionWindowSize = initialConnectionWindowSize;
+
+            if (http2Limits.GetValue<int?>("InitialStreamWindowSize") is int initialStreamWindowSize)
+                serverOptions.Limits.Http2.InitialConnectionWindowSize = initialStreamWindowSize;
+
+            if (http2Limits.GetValue<long?>("KeepAlivePingDelay") is long keepAlivePingDelay)
+                serverOptions.Limits.Http2.KeepAlivePingDelay = TimeSpan.FromSeconds(keepAlivePingDelay);
+
+            if (http2Limits.GetValue<long?>("KeepAlivePingTimeout") is long keepAlivePingTimeout)
+                serverOptions.Limits.Http2.KeepAlivePingTimeout = TimeSpan.FromSeconds(keepAlivePingTimeout);
         });
 
         return webHostBuilder;
+        
+    }
+
+    private static MinDataRate? GetMinDataRate(IConfigurationSection section)
+    {
+        if (section.GetValue<double?>("bytesPerSecond") is double bytesPerSecond &&
+            section.GetValue<long?>("gracePeriod") is long gracePeriod)
+            return new MinDataRate(bytesPerSecond, TimeSpan.FromSeconds(gracePeriod));
+        return null;
     }
 }
 ```
+#### Http Options Configurations
+Starting off with Http Options:  
+```csharp
+...
+            serverOptions.ConfigureHttpsDefaults(httpsOptions =>
+            {
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && !hostEnvironment.IsDevelopment())
+                    httpsOptions.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+               
+                if (httpsConfiguration.GetValue<long?>("HandshakeTimeout") is long seconds)
+                    httpsOptions.HandshakeTimeout = TimeSpan.FromSeconds(seconds);
 
-A few things, in `KestrelServerOptions.ConfigureHttpsDefaults()`, `httpsOptions.SslProtocols` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.SslProtocols`) If you're hosting ASP.NET Core on Windows, the TLS Protocols, SSL Certificates and ciphers are tied to the operating system, on linux environments this is not the case (not sure about MacOS though), so this is why I specified which TLS Protocols to use. Whereas `sslOptions.EnabledSslProtocols` (or `SslServerAuthenticationOptions.EnabledSslProtocols`) basically says what protocols can be matched when authentication occurs.. 
+                if (httpsConfiguration.GetValue<bool?>("CheckCertificateRevocation") is bool checkCertificateRevocation)
+                    httpsOptions.CheckCertificateRevocation = checkCertificateRevocation;
+
+                httpsOptions.OnAuthenticate = (connectionContext, sslOptions) =>
+                {
+                    sslOptions.ApplicationProtocols =
+                    [
+                        SslApplicationProtocol.Http2,
+                        SslApplicationProtocol.Http11
+                    ];
+
+                    if (!(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || hostEnvironment.IsDevelopment()))
+                    {
+                        sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(
+                        [
+                            // TLS 1.3 cipher suites
+                            TlsCipherSuite.TLS_AES_256_GCM_SHA384,
+                            TlsCipherSuite.TLS_AES_128_GCM_SHA256,
+                            TlsCipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+                            
+                            // TLS 1.2 cipher suites
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                        ]); 
+                    }
+                    sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                    sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;
+                };
+            });
+...
+```
+In `KestrelServerOptions.ConfigureHttpsDefaults()`, `httpsOptions.SslProtocols` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.SslProtocols`) if you're hosting ASP.NET Core on Windows, the TLS Protocols, SSL Certificates and ciphers are tied to the operating system, on linux environments this is not the case (not sure about MacOS though), so this is why I specified which TLS Protocols to use. Whereas `sslOptions.EnabledSslProtocols` (or `SslServerAuthenticationOptions.EnabledSslProtocols`) basically says what protocols can be matched when authentication occurs.. 
 
 However, with `httpsOptions.OnAuthenticate` (or `Microsoft.AspNetCore.Server.Kestrel.Https.HttpsConnectionAdapterOptions.OnAuthenticate`) is a variable where you assign a `Action` delegate function and it is used each time for authentication. And `sslOptions.EncryptionPolicy` (or `SslServerAuthenticationOptions.EncryptionPolicy`) and I've chosen particular cipher suites for both TLS version 1.2 and version 1.3 that supports AES encryption (since all my certificates has been encrypted with AES256). And the cipher suite is mostly based off the [TLS Cipher Suites in Windows Server 2022 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthn/tls-cipher-suites-in-windows-server-2022) in terms of order and preference.
 
+```csharp
+...
+                        sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(
+                        [
+                            // TLS 1.3 cipher suites
+                            TlsCipherSuite.TLS_AES_256_GCM_SHA384,
+                            TlsCipherSuite.TLS_AES_128_GCM_SHA256,
+                            TlsCipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+                            
+                            // TLS 1.2 cipher suites
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                            TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                        ]);
+... 
+```
+
+And I've also added handshake timeout configuration in (values needs to be in seconds) and also added configuration for checking the revocation list but only if I set the configurations on the **appsettings.json** file. In [appsettings.Staging.json](../HospitalProject.Server/appsettings.Staging.json) I've added the `HandshakeTimeout` to be 10 seconds.
+
+#### Endpoint Configuration
+The default endpoint configuration is set to use HTTP/1.x and/or HTTP/2 protocols.
+```csharp
+...
+            serverOptions.ConfigureEndpointDefaults(endpointOptions =>
+            {
+                endpointOptions.Protocols = HttpProtocols.Http1AndHttp2;        
+            });
+...
+```
+
+Although this might not be need since in the `ConfigureHttpsDefaults(...)` in the `OnAuthenticate` handler, I did specify which protocol should be used as the application protocols, which is HTTP/1.1 and HTTP/2.  
+```csharp
+...
+                    sslOptions.ApplicationProtocols =
+                    [
+                        SslApplicationProtocol.Http2,
+                        SslApplicationProtocol.Http11
+                    ];
+...
+```
+
+Sort of like an Irish saying "To be sure, to be sure" 😅.
+
+##### SSL Testing
 To test this and also ASP.NET Core needs to be running on Docker since that is where I want to test this. I ran the following command:  
 ```
 > docker run --rm \
@@ -1908,7 +2043,7 @@ As you can see the line `New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384` is usin
 
 And the output for this command is the following:
 ```
-> % docker run --rm \
+> docker run --rm \
   --network=hospital-network \
   -v ~/Workspaces/Certs/hospital.project/ca/HospitalProject.CA.pem:/ca.pem:ro \
   alpine/openssl s_client \
@@ -2135,6 +2270,69 @@ SSL-Session:
 ---
 DONE
 ```
+
+#### Kestrel Limits Configuration
+Although, initially I did not include any Kestrel Limits configuration because I wanted to keep it fairly default and after documenting the NGINX configuration, I thought you know what let's do it and see what falls out. And most of the configuration is as per [Configure options for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/options?view=aspnetcore-10.0) but I'm adding my own customisation to it. 
+
+Again, I probably didn't have to add the code in for configuring the Limits on Kestrel and could have just followed [Configuration in ASP.NET Core | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/?view=aspnetcore-10.0), but when I was creating the extension class for Forward Headers, not all configurations were getting mapped from the **appsettings.json** file (*ahem* `KnownProxies` section), so not to have a guessing game of which configurations items map or not I thought of just coding it and make sure the **appsettings.json** will read those parameters that I care about (at least).
+
+The Kestrel Limit applies to both HTTP/1.x and HTTP/2 protocols, however HTTP/2 has additional configuration items too. These are the following lines of code:  
+```csharp
+...
+            var serverLimits = httpsConfiguration.GetSection("Limits");
+
+            if (serverLimits.GetValue<long?>("MaxConcurrentConnections") is long maxConcurrentConnections)
+                 serverOptions.Limits.MaxConcurrentConnections = maxConcurrentConnections;
+
+            if (serverLimits.GetValue<long?>("MaxRequestBodySize") is long maxRequestBodySize)
+                serverOptions.Limits.MaxRequestBodySize = maxRequestBodySize;
+
+            if (serverLimits.GetValue<long?>("MaxResponseBufferSize") is long maxResponseBufferSize)
+                serverOptions.Limits.MaxResponseBufferSize = maxResponseBufferSize;
+
+            if (serverLimits.GetValue<long?>("KeepAliveTimeout") is long keepAliveTimeout)
+                serverOptions.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(keepAliveTimeout);
+
+            if (GetMinDataRate(serverLimits.GetSection("MinRequestBodyDataRate")) is { } reqRate)
+                serverOptions.Limits.MinRequestBodyDataRate = reqRate;
+
+            if (GetMinDataRate(serverLimits.GetSection("MinResponseDataRate")) is { } resRate)
+                serverOptions.Limits.MinResponseDataRate = resRate;
+
+            var http2Limits = serverLimits.GetSection("HTTP2");
+
+            if (http2Limits.GetValue<int?>("MaxStreamsPerConnection") is int maxStreamsPerConnection)
+                serverOptions.Limits.Http2.MaxStreamsPerConnection = maxStreamsPerConnection;
+
+            if (http2Limits.GetValue<int?>("HeaderTableSize") is int headerTableSize)
+                serverOptions.Limits.Http2.HeaderTableSize = headerTableSize;
+
+            if (http2Limits.GetValue<int?>("MaxFrameSize") is int maxFrameSize)
+                serverOptions.Limits.Http2.MaxFrameSize = maxFrameSize;
+
+            if (http2Limits.GetValue<int?>("MaxRequestHeaderFieldSize") is int maxRequestHeaderFieldSize)
+                serverOptions.Limits.Http2.MaxRequestHeaderFieldSize = maxRequestHeaderFieldSize;
+
+            if (http2Limits.GetValue<int?>("InitialConnectionWindowSize") is int initialConnectionWindowSize)
+                serverOptions.Limits.Http2.InitialConnectionWindowSize = initialConnectionWindowSize;
+
+            if (http2Limits.GetValue<int?>("InitialStreamWindowSize") is int initialStreamWindowSize)
+                serverOptions.Limits.Http2.InitialConnectionWindowSize = initialStreamWindowSize;
+
+            if (http2Limits.GetValue<long?>("KeepAlivePingDelay") is long keepAlivePingDelay)
+                serverOptions.Limits.Http2.KeepAlivePingDelay = TimeSpan.FromSeconds(keepAlivePingDelay);
+
+            if (http2Limits.GetValue<long?>("KeepAlivePingTimeout") is long keepAlivePingTimeout)
+                serverOptions.Limits.Http2.KeepAlivePingTimeout = TimeSpan.FromSeconds(keepAlivePingTimeout);
+...
+```
+
+* `MaxConcurrentConnections` controls the maximum number of open connections, which I set to 100.
+* `MaxRequestBodySize` controls the maximum allowable size of the body request, which is in bytes and I have set it to 5242880 bytes, which is 5 MB.
+* `MaxResponseBufferSize` sets the maximum size of the response buffer before write calls begins to block or return tasks that don't complete until the buffer flushed out or dropped which should be below the configured limit. Default is 64 KB so at the moment leaving it as is but something I'll come back to and change. And also can be null as well then the buffer size is unlimited (not a good idea to set it to unlimited 😑, either data loss or memory overflow can happen, always remember to flush the buffer out!)
+* `KeepAliveTimeout` sets the timeout for the Keep Alive connection and have set the value to 30 seconds.
+* `MinRequestBodyDataRate` controls the request minimum data rate in bytes per second within a certain time/grace period. This means that the client must send the request body within the amount the time specified otherwise it will throw an `BadHttpRequestException` for data arriving too slow. For this configuration, `BytesPerSecond` is set to 128 and `GracePeriod` is 2 seconds. 
+* `MinResponseDataRate` same thing as `MinRequestBodyDataRate` but for the response 
 
 ### NGINX
 ### Front End SSL Configuration
@@ -2593,7 +2791,7 @@ Coming back to the reverse proxy, I've added times of the following:
 
 `proxy_connect_timeout` sets the timeout for establishing a connection with ASP.NET Core backend. And it should be quick since both are running on a docker container on the same network bridge/subnet.
 
-`proxy_send_timeout` sets the timeout for transmitting a request to the ASP.NET Core backend. The timeout is set only between two successive write opterations not for the whole transmission, I can see this directive changing and also the next one which is `proxy_read_timeout` which is reading a response from ASP.NET Core.
+`proxy_send_timeout` sets the timeout for transmitting a request to the ASP.NET Core backend. The timeout is set only between two successive write operations not for the whole transmission, I can see this directive changing and also the next one which is `proxy_read_timeout` which is reading a response from ASP.NET Core.
 
 # References
 * [Writing a Dockerfile | Docker Docs](https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/)
@@ -2619,6 +2817,7 @@ Coming back to the reverse proxy, I've added times of the following:
 * [verify - OpenSSL Documentation](https://docs.openssl.org/1.0.2/man1/verify/)
 * [Ubuntu Manpage: certutil - Manage keys and certificate in both NSS databases and other NSS tokens](https://manpages.ubuntu.com/manpages/xenial/man1/certutil.1.html)
 * [Configure endpoints for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0#configure-https)
+* [Configure options for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/options?view=aspnetcore-10.0)
 * [TLS Cipher Suites in Windows Server 2022 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthn/tls-cipher-suites-in-windows-server-2022)
 * [openssl s_client commands and examples - Mister PKI](https://www.misterpki.com/openssl-s-client/)
 * [openssl-s_client - OpenSSL Documentation](https://docs.openssl.org/3.0/man1/openssl-s_client/)

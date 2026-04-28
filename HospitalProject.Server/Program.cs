@@ -12,10 +12,7 @@ Log.Logger = new LoggerConfiguration()
 try
 {
 
-    if (!builder.Environment.IsDevelopment())
-    {
-        builder.WebHost.ConfigureKestrelHttpsDefaults(builder.Environment);
-    }
+    builder.WebHost.ConfigureKestrelHttpsDefaults(builder.Configuration, builder.Environment);
 
     builder.Services.AddSerilog((services, lc) => lc
         .ReadFrom.Configuration(builder.Configuration)

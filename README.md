@@ -24,4 +24,4 @@ I'm developing locally on a MacBook Air M1 and an Ubuntu gaming PC, using VS Cod
 * [Setting Up For Local Development](./Documentation/02_SettingUpForLocalDevelopment.md)
 * [Setting Up Nginx and Docker](./Documentation/03_SettingUpNginxAndDocker.md)
 
-*This is a work in progress. Feedback and suggestions are welcome — I'm not perfect and happy to be corrected 😅*
+*This is a work in progress. Feedback and suggestions are welcome — I'm not perfect and plus was on some heavy medication, so will be happy to be corrected 😅*

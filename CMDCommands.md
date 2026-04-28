@@ -22,7 +22,7 @@ dotnet dev-certs https --trust
 
 Generate PEM files with `dev-certs`:
 ```cmd
-dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.SSC.pem --format pem -np
+dotnet dev-certs https -ep ~/Workspaces/Certs/dotnet/hospitalproject.client.pem --format pem -np
 ```
 
 # NodeJS

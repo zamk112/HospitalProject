@@ -48,9 +48,10 @@ public static class KestrelConfigurationExtensions
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
                         ]); 
+
+                        sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                        sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;
                     }
-                    sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
-                    sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;
                 };
             });
 
@@ -97,7 +98,7 @@ public static class KestrelConfigurationExtensions
                 serverOptions.Limits.Http2.InitialConnectionWindowSize = initialConnectionWindowSize;
 
             if (http2Limits.GetValue<int?>("InitialStreamWindowSize") is int initialStreamWindowSize)
-                serverOptions.Limits.Http2.InitialConnectionWindowSize = initialStreamWindowSize;
+                serverOptions.Limits.Http2.InitialStreamWindowSize = initialStreamWindowSize;
 
             if (http2Limits.GetValue<long?>("KeepAlivePingDelay") is long keepAlivePingDelay)
                 serverOptions.Limits.Http2.KeepAlivePingDelay = TimeSpan.FromSeconds(keepAlivePingDelay);

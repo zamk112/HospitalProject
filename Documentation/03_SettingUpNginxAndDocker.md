@@ -1865,10 +1865,11 @@ Starting off with Http Options:
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-                        ]); 
+                        ]);
+
+                        sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                        sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;
                     }
-                    sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
-                    sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;
                 };
             });
 ...
@@ -1891,6 +1892,9 @@ However, with `httpsOptions.OnAuthenticate` (or `Microsoft.AspNetCore.Server.Kes
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
                             TlsCipherSuite.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
                         ]);
+
+                        sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                        sslOptions.EncryptionPolicy = EncryptionPolicy.RequireEncryption;
 ... 
 ```
 
@@ -2274,7 +2278,7 @@ DONE
 #### Kestrel Limits Configuration
 Although, initially I did not include any Kestrel Limits configuration because I wanted to keep it fairly default and after documenting the NGINX configuration, I thought you know what let's do it and see what falls out. And most of the configuration is as per [Configure options for the ASP.NET Core Kestrel web server | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/options?view=aspnetcore-10.0) but I'm adding my own customisation to it. 
 
-Again, I probably didn't have to add the code in for configuring the Limits on Kestrel and could have just followed [Configuration in ASP.NET Core | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/?view=aspnetcore-10.0), but when I was creating the extension class for Forward Headers, not all configurations were getting mapped from the **appsettings.json** file (*ahem* `KnownProxies` section), so not to have a guessing game of which configurations items map or not I thought of just coding it and make sure the **appsettings.json** will read those parameters that I care about (at least).
+Again, I probably didn't have to add the code in for configuring the Limits on Kestrel and could have just followed [Configuration in ASP.NET Core | Microsoft Learn](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/?view=aspnetcore-10.0), but when I was creating the extension class for Forward Headers, not all configurations were getting mapped from the **appsettings.json** file (*ahem* `KnownProxies` section), so not to have a guessing game of which configurations items map or not I thought of just coding it and make sure that [appsettings.Staging.json](../HospitalProject.Server/appsettings.Staging.json) will read those parameters that I care about (at least).
 
 The Kestrel Limit applies to both HTTP/1.x and HTTP/2 protocols, however HTTP/2 has additional configuration items too. These are the following lines of code:  
 ```csharp
@@ -2317,7 +2321,7 @@ The Kestrel Limit applies to both HTTP/1.x and HTTP/2 protocols, however HTTP/2 
                 serverOptions.Limits.Http2.InitialConnectionWindowSize = initialConnectionWindowSize;
 
             if (http2Limits.GetValue<int?>("InitialStreamWindowSize") is int initialStreamWindowSize)
-                serverOptions.Limits.Http2.InitialConnectionWindowSize = initialStreamWindowSize;
+                serverOptions.Limits.Http2.InitialStreamWindowSize = initialStreamWindowSize;
 
             if (http2Limits.GetValue<long?>("KeepAlivePingDelay") is long keepAlivePingDelay)
                 serverOptions.Limits.Http2.KeepAlivePingDelay = TimeSpan.FromSeconds(keepAlivePingDelay);
@@ -2332,7 +2336,27 @@ The Kestrel Limit applies to both HTTP/1.x and HTTP/2 protocols, however HTTP/2 
 * `MaxResponseBufferSize` sets the maximum size of the response buffer before write calls begins to block or return tasks that don't complete until the buffer flushed out or dropped which should be below the configured limit. Default is 64 KB so at the moment leaving it as is but something I'll come back to and change. And also can be null as well then the buffer size is unlimited (not a good idea to set it to unlimited 😑, either data loss or memory overflow can happen, always remember to flush the buffer out!)
 * `KeepAliveTimeout` sets the timeout for the Keep Alive connection and have set the value to 30 seconds.
 * `MinRequestBodyDataRate` controls the request minimum data rate in bytes per second within a certain time/grace period. This means that the client must send the request body within the amount the time specified otherwise it will throw an `BadHttpRequestException` for data arriving too slow. For this configuration, `BytesPerSecond` is set to 128 and `GracePeriod` is 2 seconds. 
-* `MinResponseDataRate` same thing as `MinRequestBodyDataRate` but for the response 
+* `MinResponseDataRate` same thing as `MinRequestBodyDataRate` but for the response. And set the values as the same as `MinRequestBodyDataRate`.
+
+Before I go any further, for retrieving the values for `MinRequestBodyDataRate` and `MinResponseDataRate`, I created a function since it was retrieving the same type of values.  
+```csharp
+...
+    private static MinDataRate? GetMinDataRate(IConfigurationSection section)
+    {
+        if (section.GetValue<double?>("BytesPerSecond") is double bytesPerSecond &&
+            section.GetValue<long?>("GracePeriod") is long gracePeriod)
+            return new MinDataRate(bytesPerSecond, TimeSpan.FromSeconds(gracePeriod));
+        return null;
+    }
+...
+```
+
+The function returns a `MinDataRate` or null, which is from ` Microsoft.AspNetCore.Server.Kestrel.Core` namespace. When this function is called in the if statement to retrieve the values of `BytesPerSecond` & `GracePeriod`, I also use the `is { }` to check if the value return is not null and then assign it to the local variables `reqRate` and `resRate` accordingly.
+
+With HTTP/2 limits, I have parametrised the following: 
+* `MaxStreamsPerConnection` limits the number of concurrent request streams for HTTP/2. Excess streams are refused, which is set the value to 50 (it's only me using my docker container, don't need any more).
+* `HeaderTableSize` limits the size of the header compression tables, in octets (by default its 4KiB which is $2^12$) for the HPACK encoder and decoder on Kestrel. I've set it to 1024 bytes (1KiB) for now (definitely will need to change this for later).
+* `MaxFrameSize` indicates
 
 ### NGINX
 ### Front End SSL Configuration
@@ -2861,3 +2885,4 @@ Coming back to the reverse proxy, I've added times of the following:
 * [Increase Nginx worker open files and connections](https://www.robert-michalski.com/blog/nginx-raise-connection-limit)
 * [Module ngx_http_proxy_module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
 * [Module ngx_http_core_module](https://nginx.org/en/docs/http/ngx_http_core_module.html)
+* [c# - What does &quot;is { }&quot; mean? - Stack Overflow](https://stackoverflow.com/questions/60417114/what-does-is-mean)
